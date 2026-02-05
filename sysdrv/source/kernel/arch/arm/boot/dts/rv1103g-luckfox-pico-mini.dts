@@ -28,6 +28,14 @@
         dht11_sensor {
                 status = "disabled";
         };
+
+        lcd-bl-fix{
+                compatible = "regulator-fixed";
+                pinctrl-names = "default";
+                pinctrl-0 = <&gpio0_pa4>;
+                regulator-name = "lcd-bl-fix";
+                regulator-always-on;
+        };
 };
 
 /**********SFC**********/
@@ -88,9 +96,11 @@
                 reg = <0>;
                 spi-max-frequency = <24000000>;
                 fps = <60>;
-                width = <240>;     // 水平分辨率
-                height = <135>;    // 垂直分辨率
-                rotate = <0>;
+                width = <135>;     // 水平分辨率
+                height = <240>;    // 垂直分辨率
+                x-offset = <40>;
+                y-offset = <52>;
+                rotate = <90>;
                 buswidth = <8>;
                 debug = <0x7>;
                 power-supply = <&virtual_vcc>;
@@ -150,4 +160,12 @@
 /* PWM1_M0 */
 &pwm1 {
 	status = "disabled";
+};
+
+&pinctrl {
+        gpio0-pa4 {
+                gpio0_pa4:gpio0-pa4 {
+                        rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_none>;
+                };
+        };
 };

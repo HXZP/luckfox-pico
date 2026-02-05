@@ -203,6 +203,11 @@ EXPORT_SYMBOL(fbtft_register_backlight);
 static void fbtft_set_addr_win(struct fbtft_par *par, int xs, int ys, int xe,
 			       int ye)
 {
+	xs += par->pdata->display.x_offset;
+	xe += par->pdata->display.x_offset;
+	ys += par->pdata->display.y_offset;
+	ye += par->pdata->display.y_offset;
+
 	write_reg(par, MIPI_DCS_SET_COLUMN_ADDRESS,
 		  (xs >> 8) & 0xFF, xs & 0xFF, (xe >> 8) & 0xFF, xe & 0xFF);
 
@@ -1159,6 +1164,8 @@ static struct fbtft_platform_data *fbtft_properties_read(struct device *dev)
 
 	pdata->display.width = fbtft_property_value(dev, "width");
 	pdata->display.height = fbtft_property_value(dev, "height");
+	pdata->display.x_offset = fbtft_property_value(dev, "x-offset");
+	pdata->display.y_offset = fbtft_property_value(dev, "y-offset");
 	pdata->display.regwidth = fbtft_property_value(dev, "regwidth");
 	pdata->display.buswidth = fbtft_property_value(dev, "buswidth");
 	pdata->display.backlight = fbtft_property_value(dev, "backlight");

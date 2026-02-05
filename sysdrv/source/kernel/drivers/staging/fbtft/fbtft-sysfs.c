@@ -205,9 +205,68 @@ static ssize_t show_debug(struct device *device,
 static struct device_attribute debug_device_attr =
 	__ATTR(debug, 0660, show_debug, store_debug);
 
+//
+static ssize_t store_x_offset(struct device *device,
+			   struct device_attribute *attr,
+			   const char *buf, size_t count)
+{
+	struct fb_info *fb_info = dev_get_drvdata(device);
+	struct fbtft_par *par = fb_info->par;
+	int ret;
+
+	ret = kstrtouint(buf, 10, &par->pdata->display.x_offset);
+	if (ret)
+		return ret;
+
+	return count;
+}
+
+static ssize_t show_x_offset(struct device *device,
+			  struct device_attribute *attr, char *buf)
+{
+	struct fb_info *fb_info = dev_get_drvdata(device);
+	struct fbtft_par *par = fb_info->par;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", par->pdata->display.x_offset);
+}
+
+static struct device_attribute x_offset_device_attr =
+	__ATTR(x_offset, 0660, show_x_offset, store_x_offset);
+
+
+static ssize_t store_y_offset(struct device *device,
+			   struct device_attribute *attr,
+			   const char *buf, size_t count)
+{
+	struct fb_info *fb_info = dev_get_drvdata(device);
+	struct fbtft_par *par = fb_info->par;
+	int ret;
+
+	ret = kstrtouint(buf, 10, &par->pdata->display.y_offset);
+	if (ret)
+		return ret;
+
+	return count;
+}
+
+static ssize_t show_y_offset(struct device *device,
+			  struct device_attribute *attr, char *buf)
+{
+	struct fb_info *fb_info = dev_get_drvdata(device);
+	struct fbtft_par *par = fb_info->par;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", par->pdata->display.y_offset);
+}
+
+static struct device_attribute y_offset_device_attr =
+	__ATTR(y_offset, 0660, show_y_offset, store_y_offset);
+//
+	
 void fbtft_sysfs_init(struct fbtft_par *par)
 {
 	device_create_file(par->info->dev, &debug_device_attr);
+	device_create_file(par->info->dev, &x_offset_device_attr);
+	device_create_file(par->info->dev, &y_offset_device_attr);
 	if (par->gamma.curves && par->fbtftops.set_gamma)
 		device_create_file(par->info->dev, &gamma_device_attrs[0]);
 }
@@ -215,6 +274,8 @@ void fbtft_sysfs_init(struct fbtft_par *par)
 void fbtft_sysfs_exit(struct fbtft_par *par)
 {
 	device_remove_file(par->info->dev, &debug_device_attr);
+	device_remove_file(par->info->dev, &x_offset_device_attr);
+	device_remove_file(par->info->dev, &y_offset_device_attr);
 	if (par->gamma.curves && par->fbtftops.set_gamma)
 		device_remove_file(par->info->dev, &gamma_device_attrs[0]);
 }
