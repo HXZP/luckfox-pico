@@ -33,6 +33,38 @@
 		BT,wake_host_irq = <&gpio1 RK_PA2 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
+
+	virtual_vcc: vcc-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "virtual-vcc";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;  // 标记为持续开启
+	};
+
+	adc-keys {
+		status = "disabled";
+	};
+
+	out_osc_mia1321: out-osc-mia1321 {
+		status = "disabled";
+	};
+
+	out_osc_imx415: out-osc-imx415 {
+		status = "disabled";
+	};
+
+	out_osc_sc3336: out-osc-sc3336 {
+		compatible = "fixed-clock";
+		clock-output-names = "out-osc-sc3336";
+		clock-frequency = <24000000>;
+		#clock-cells = <0>;
+	};
+
+	cam_ircut0: cam_ircut {
+		status = "disabled";
+	};
+
 };
 
 /**********CRU**********/
@@ -152,10 +184,154 @@
 	};
 };
 
+&i2c3{
+	status = "disabled";
+};
+
+&uart3 {
+	status = "disabled";
+};
+&uart4 {
+	status = "disabled";
+};
+
+
 /**********SPI**********/
 &spi0 {
-	status = "disabled";
+	status = "okay";
+	pinctrl-0 = <&spi0m0_clk &spi0m0_mosi &spi0m0_cs0>;
+
 	spidev@0 {
+		status = "disabled";
 		spi-max-frequency = <50000000>;
 	};
+
+	fbtft@0{
+		status = "disabled";
+		compatible = "sitronix,st7789v";
+		reg = <0>;
+		spi-max-frequency = <24000000>;
+		fps = <60>;
+		width = <240>;     // 水平分辨率
+		height = <135>;    // 垂直分辨率
+		x-offset = <40>;
+		y-offset = <53>;
+		rotate = <0>;
+		buswidth = <8>;
+		debug = <0x7>;
+		power-supply = <&virtual_vcc>;
+		led-gpios = <&gpio3 RK_PD1 GPIO_ACTIVE_HIGH>;		//BL
+		dc-gpios = <&gpio1 RK_PC3 GPIO_ACTIVE_HIGH>;     	 //D-h C-l
+		// reset-gpios = <&gpio3 RK_PD2 GPIO_ACTIVE_LOW>;    //RES
+		init = <
+			0x1000001// 复位
+			0x2000064// 延时 100 ms
+			0x1000011// 退出睡眠模式
+			0x2000078// 延时 120 ms  
+			// 0x1000036 0x60//设置显示方向
+			0x100003A 0x55// 设置颜色格式为 16 位 RGB
+			0x1000020
+			0x10000B2 0x01 0x01 0x00 0x01 0x01
+			0x10000B7 0x35
+
+			0x10000BB 0x35
+			0x10000C0 0x2C
+			0x10000C2 0x01
+			0x10000C3 0x0B
+			0x10000C4 0x20
+
+			0x1000051 0xFF
+			0x10000C6 0x00
+			0x10000D0 0xA4 0xA1
+
+			0x10000E0 0xD0 0x00 0x02 0x07 0x0B 0x1A 0x31 0x54 0x40 0x29 0x12 0x12 0x17 
+			0x10000E1 0xD0 0x00 0x02 0x07 0x05 0x25 0x2D 0x44 0x45 0x1C 0x18 0x16 0x1C 
+
+			0x1000021
+			0x1000028
+			0x1000029// 开启显示
+		>;
+	};
+
+};
+
+&csi2_dphy0 {
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			csi_dphy_input0: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&sc3336_out>;
+				data-lanes = <1 2>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			csi_dphy_output: endpoint@0 {
+					reg = <0>;
+					remote-endpoint = <&mipi_csi2_input>;
+			};
+		};
+	};
+};
+
+&i2c4 {
+	status = "okay";
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c4m2_xfer>;
+
+	sc3336: sc3336@30 {
+		compatible = "smartsens,sc3336";
+		status = "okay";
+		reg = <0x30>;
+		clocks = <&out_osc_sc3336>;
+		clock-names = "xvclk";
+		pwdn-gpios = <&gpio3 RK_PC5 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&mipi_refclk_out0>;
+		rockchip,camera-module-index = <0>;
+		rockchip,camera-module-facing = "back";
+		rockchip,camera-module-name = "CMK-OT2119-PC1";
+		rockchip,camera-module-lens-name = "30IRC-F16";
+		port {
+			sc3336_out: endpoint {
+				remote-endpoint = <&csi_dphy_input0>;
+				data-lanes = <1 2>;
+			};
+		};
+	};
+
+	mia1321: mia1321@60 {
+		status = "disabled";
+	};
+
+	imx415: imx415@37 {
+		status = "disabled";
+	};
+};
+
+&pinctrl {
+	cam {
+		status = "disabled";
+	};
+};
+
+&i2c2 {
+	status = "okay";
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c2m0_xfer>;
 };

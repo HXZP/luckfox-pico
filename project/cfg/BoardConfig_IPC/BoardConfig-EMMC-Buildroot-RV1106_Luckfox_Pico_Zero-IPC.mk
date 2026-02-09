@@ -92,7 +92,8 @@ export RK_KERNEL_DEFCONFIG_FRAGMENT=rv1106-bt.config
 # ./build.sh media and copy <SDK root dir>/output/out/media_out/isp_iqfiles/$RK_CAMERA_SENSOR_IQFILES
 #export RK_CAMERA_SENSOR_IQFILES="sc4336_OT01_40IRC_F16.json sc3336_CMK-OT2119-PC1_30IRC-F16.json mis5001_CMK-OT2115-PC1_30IRC-F16.json"
 #export RK_CAMERA_SENSOR_IQFILES="sc4336_OT01_40IRC_F16.json sc3336_CMK-OT2119-PC1_30IRC-F16.json sc530ai_CMK-OT2115-PC1_30IRC-F16.json"
-export RK_CAMERA_SENSOR_IQFILES="mia1321_MIA1321_30IRC-F16.json imx415_CMK-OT2022-PX1_IR0147-36IRC-8M-F20.json"
+# export RK_CAMERA_SENSOR_IQFILES="mia1321_MIA1321_30IRC-F16.json imx415_CMK-OT2022-PX1_IR0147-36IRC-8M-F20.json"
+export RK_CAMERA_SENSOR_IQFILES="sc3336_CMK-OT2119-PC1_30IRC-F16.json"
 
 # Config sensor lens CAC calibrattion bin files
 #export RK_CAMERA_SENSOR_CAC_BIN="CAC_sc4336_OT01_40IRC_F16"
@@ -112,8 +113,8 @@ export RK_ENABLE_WIFI=y
 export RK_ENABLE_WIFI_CHIP=AIC8800DC
 
 # config wifi ssid and passwd
-export LF_WIFI_SSID="Your wifi ssid"
-export LF_WIFI_PSK="Your wifi password"
+export LF_WIFI_SSID="HXZP"
+export LF_WIFI_PSK="lxla2000"
 
 #################################################
 #  PRE and POST

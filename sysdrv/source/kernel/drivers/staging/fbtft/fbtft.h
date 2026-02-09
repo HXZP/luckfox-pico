@@ -112,6 +112,8 @@ struct fbtft_display {
 	struct fbtft_ops fbtftops;
 	unsigned int bpp;
 	unsigned int fps;
+	unsigned int x_offset;
+	unsigned int y_offset;
 	int txbuflen;
 	const s16 *init_sequence;
 	char *gamma;
