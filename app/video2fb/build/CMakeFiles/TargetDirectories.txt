@@ -1,0 +1,8 @@
+/home/hxzp/luckfox-zero/app/video2fb/build/CMakeFiles/edit_cache.dir
+/home/hxzp/luckfox-zero/app/video2fb/build/CMakeFiles/rebuild_cache.dir
+/home/hxzp/luckfox-zero/app/video2fb/build/src/CMakeFiles/fbtest.dir
+/home/hxzp/luckfox-zero/app/video2fb/build/src/CMakeFiles/v2fb.dir
+/home/hxzp/luckfox-zero/app/video2fb/build/src/CMakeFiles/yuv2fb.dir
+/home/hxzp/luckfox-zero/app/video2fb/build/src/CMakeFiles/simple_camera_fb.dir
+/home/hxzp/luckfox-zero/app/video2fb/build/src/CMakeFiles/edit_cache.dir
+/home/hxzp/luckfox-zero/app/video2fb/build/src/CMakeFiles/rebuild_cache.dir

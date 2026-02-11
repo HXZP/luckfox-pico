@@ -42,6 +42,16 @@
 		regulator-always-on;  // 标记为持续开启
 	};
 
+	lcd_vcc: lcd-vcc {
+		compatible = "regulator-fixed";
+		regulator-name = "lcd-vcc";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gpio3_pd1>;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;  // 标记为持续开启
+	};
+
 	adc-keys {
 		status = "disabled";
 	};
@@ -197,6 +207,14 @@
 
 
 /**********SPI**********/
+&pinctrl {
+	gpio3-pd1 {
+		gpio3_pd1:gpio3-pd1 {
+			rockchip,pins = <3 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none_drv_level_15>;
+		};
+	};
+};
+
 &spi0 {
 	status = "okay";
 	pinctrl-0 = <&spi0m0_clk &spi0m0_mosi &spi0m0_cs0>;
@@ -207,7 +225,6 @@
 	};
 
 	fbtft@0{
-		status = "disabled";
 		compatible = "sitronix,st7789v";
 		reg = <0>;
 		spi-max-frequency = <24000000>;
@@ -222,7 +239,7 @@
 		power-supply = <&virtual_vcc>;
 		led-gpios = <&gpio3 RK_PD1 GPIO_ACTIVE_HIGH>;		//BL
 		dc-gpios = <&gpio1 RK_PC3 GPIO_ACTIVE_HIGH>;     	 //D-h C-l
-		// reset-gpios = <&gpio3 RK_PD2 GPIO_ACTIVE_LOW>;    //RES
+		reset-gpios = <&gpio3 RK_PD2 GPIO_ACTIVE_LOW>;    //RES
 		init = <
 			0x1000001// 复位
 			0x2000064// 延时 100 ms
@@ -334,4 +351,57 @@
 	clock-frequency = <400000>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c2m0_xfer>;
+};
+
+//大灯
+&pwm10 {
+	status = "okay";
+	pinctrl-0 = <&pwm10m2_pins>;
+};
+//rgb灯
+&pwm3 {
+	status = "okay";
+	pinctrl-0 = <&pwm3m1_pins>;
+};
+
+&pwm0 {
+	status = "disabled";
+	pinctrl-0 = <&pwm0m1_pins>;
+};
+&pwm1 {
+	status = "disabled";
+	pinctrl-0 = <&pwm1m0_pins &pwm1m1_pins &pwm1m2_pins>;
+};
+&pwm2 {
+	status = "disabled";
+	pinctrl-0 = <&pwm2m0_pins &pwm2m1_pins &pwm2m2_pins>;
+};
+
+&pwm4 {
+	status = "disabled";
+	pinctrl-0 = <&pwm4m0_pins &pwm4m1_pins &pwm4m2_pins>;
+};
+&pwm5 {
+	status = "disabled";
+	pinctrl-0 = <&pwm5m1_pins &pwm5m2_pins>;
+};
+&pwm6 {
+	status = "disabled";
+	pinctrl-0 = <&pwm6m1_pins &pwm6m2_pins>;
+};
+&pwm7 {
+	status = "disabled";
+	pinctrl-0 = <&pwm7m0_pins &pwm7m1_pins>;
+};
+&pwm8 {
+	status = "disabled";
+	pinctrl-0 = <&pwm8m1_pins>;
+};
+&pwm9 {
+	status = "disabled";
+	pinctrl-0 = <&pwm9m1_pins>;
+};
+&pwm11 {
+	status = "disabled";
+	pinctrl-0 = <&pwm11m1_pins &pwm11m2_pins>;
 };
