@@ -42,15 +42,15 @@
 		regulator-always-on;  // 标记为持续开启
 	};
 
-	lcd_vcc: lcd-vcc {
-		compatible = "regulator-fixed";
-		regulator-name = "lcd-vcc";
-		pinctrl-names = "default";
-		pinctrl-0 = <&gpio3_pd1>;
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-		regulator-always-on;  // 标记为持续开启
-	};
+	// lcd_vcc: lcd-vcc {
+	// 	compatible = "regulator-fixed";
+	// 	regulator-name = "lcd-vcc";
+	// 	pinctrl-names = "default";
+	// 	pinctrl-0 = <&gpio3_pd1>;
+	// 	regulator-min-microvolt = <3300000>;
+	// 	regulator-max-microvolt = <3300000>;
+	// 	regulator-always-on;  // 标记为持续开启
+	// };
 
 	adc-keys {
 		status = "disabled";
@@ -194,10 +194,6 @@
 	};
 };
 
-&i2c3{
-	status = "disabled";
-};
-
 &uart3 {
 	status = "disabled";
 };
@@ -208,9 +204,9 @@
 
 /**********SPI**********/
 &pinctrl {
-	gpio3-pd1 {
-		gpio3_pd1:gpio3-pd1 {
-			rockchip,pins = <3 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none_drv_level_15>;
+	gpio1-pd0 {
+		gpio1_pd0:gpio1-pd0 {
+			rockchip,pins = <1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };
@@ -229,15 +225,15 @@
 		reg = <0>;
 		spi-max-frequency = <24000000>;
 		fps = <60>;
-		width = <240>;     // 水平分辨率
-		height = <135>;    // 垂直分辨率
+		width = <135>;     // 水平分辨率
+		height = <240>;    // 垂直分辨率
 		x-offset = <40>;
 		y-offset = <53>;
-		rotate = <0>;
+		rotate = <270>;
 		buswidth = <8>;
 		debug = <0x7>;
 		power-supply = <&virtual_vcc>;
-		led-gpios = <&gpio3 RK_PD1 GPIO_ACTIVE_HIGH>;		//BL
+		led-gpios = <&gpio1 RK_PD0 GPIO_ACTIVE_HIGH>;		//BL
 		dc-gpios = <&gpio1 RK_PC3 GPIO_ACTIVE_HIGH>;     	 //D-h C-l
 		reset-gpios = <&gpio3 RK_PD2 GPIO_ACTIVE_LOW>;    //RES
 		init = <
@@ -351,6 +347,13 @@
 	clock-frequency = <400000>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c2m0_xfer>;
+};
+
+&i2c3 {
+	status = "okay";
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c3m0_xfer>;
 };
 
 //大灯
