@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Bosch BMI088 IMU driver
+#
+
+config BMI088
+	tristate
+	select IIO_BUFFER
+	select IIO_TRIGGERED_BUFFER
+
+config BMI088_I2C
+	tristate "Bosch BMI088 I2C driver"
+	depends on I2C
+	select BMI088
+	select REGMAP_I2C
+	help
+	  Enable support for the Bosch BMI088 6-Axis IMU connected via I2C.
+
+	  The BMI088 uses two separate I2C slave addresses — one for the
+	  accelerometer (0x18/0x19) and one for the gyroscope (0x68/0x69).
+	  The driver probes on the accelerometer address and derives the
+	  gyroscope address automatically based on the SDO pin state.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called bmi088_i2c.
+
+config BMI088_SPI
+	tristate "Bosch BMI088 SPI driver (stub)"
+	depends on SPI
+	select BMI088
+	select REGMAP_SPI
+	help
+	  Stub driver for the Bosch BMI088 6-Axis IMU SPI interface.
+	  Full SPI dual chip-select support is not yet implemented;
+	  selecting this option will result in a probe-time -ENOSYS error.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called bmi088_spi.

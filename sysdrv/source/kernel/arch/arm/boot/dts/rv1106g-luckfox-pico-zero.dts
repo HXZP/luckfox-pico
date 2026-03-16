@@ -347,13 +347,19 @@
 	clock-frequency = <400000>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c2m0_xfer>;
+
+    bmi088: imu@18 {
+        compatible = "bosch,bmi088";
+        reg = <0x18>;
+        status = "okay";
+    };
 };
 
 &i2c3 {
-	status = "okay";
-	clock-frequency = <400000>;
-	pinctrl-names = "default";
-	pinctrl-0 = <&i2c3m0_xfer>;
+    status = "okay";
+    clock-frequency = <400000>;
+    pinctrl-names = "default";
+    pinctrl-0 = <&i2c3m0_xfer>;
 };
 
 //大灯
