@@ -960,6 +960,6 @@ int bmi088_core_probe(struct device *dev,
 }
 EXPORT_SYMBOL_NS_GPL(bmi088_core_probe, IIO_BMI088);
 
-MODULE_AUTHOR("Your Name <your@email.com>");
+MODULE_AUTHOR("HXZP <1324146673@qq.com>");
 MODULE_DESCRIPTION("Bosch BMI088 6-Axis IMU core driver");
 MODULE_LICENSE("GPL");
