@@ -8,3 +8,7 @@ project/app/wifi_app/wpa_supplicant.conf
 config/
 sysdrv/tools/board/memtester/memtester-4.6.0/
 sysdrv/tools/board/dosfstools/dosfstools-4.2/
+
+# Ignore all build output under app
+app/**/build/
+app/**/build

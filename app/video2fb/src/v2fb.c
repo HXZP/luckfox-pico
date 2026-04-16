@@ -40,11 +40,10 @@ static void init_yuv_table(void) {
     table_initialized = 1;
 }
 
-// 快速YUV420转RGB24
-static void yuv420_to_rgb24_fast(uint8_t *yuv, uint8_t *rgb, int width, int height) {
+// 快速NV12转RGB24
+static void nv12_to_rgb24_fast(uint8_t *yuv, uint8_t *rgb, int width, int height) {
     uint8_t *y = yuv;
-    uint8_t *u = y + width * height;
-    uint8_t *v = u + (width * height) / 4;
+    uint8_t *uv = y + width * height;
     
     int y_index, uv_index;
     int r, g, b;
@@ -52,11 +51,11 @@ static void yuv420_to_rgb24_fast(uint8_t *yuv, uint8_t *rgb, int width, int heig
     for (int j = 0; j < height; j++) {
         for (int i = 0; i < width; i++) {
             y_index = j * width + i;
-            uv_index = (j/2) * (width/2) + (i/2);
+            uv_index = (j / 2) * width + (i & ~1);
             
             int y_val = y[y_index];
-            int u_val = u[uv_index];
-            int v_val = v[uv_index];
+            int u_val = uv[uv_index];
+            int v_val = uv[uv_index + 1];
             
             // 使用查找表加速计算
             int c = y_val - 16;
@@ -103,12 +102,17 @@ static void crop_and_scale(uint8_t *src, uint8_t *dst,
 int main() {
     int cam_fd, fb_fd;
     struct v4l2_format fmt;
+    struct v4l2_requestbuffers req;
+    struct v4l2_buffer buf;
+    struct v4l2_plane planes[VIDEO_MAX_PLANES];
     struct fb_var_screeninfo vinfo;
     struct fb_fix_screeninfo finfo;
+    enum v4l2_buf_type buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     uint8_t *framebuffer;
     uint8_t *yuv_buffer;
     uint8_t *rgb_buffer;
     uint8_t *cropped_buffer;
+    size_t yuv_mmap_len;
     
     // 打开摄像头
     cam_fd = open(CAMERA_DEVICE, O_RDWR);
@@ -119,11 +123,12 @@ int main() {
     
     // 设置摄像头格式
     memset(&fmt, 0, sizeof(fmt));
-    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    fmt.fmt.pix.width = SOURCE_WIDTH;
-    fmt.fmt.pix.height = SOURCE_HEIGHT;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
-    fmt.fmt.pix.field = V4L2_FIELD_NONE;
+    fmt.type = buf_type;
+    fmt.fmt.pix_mp.width = SOURCE_WIDTH;
+    fmt.fmt.pix_mp.height = SOURCE_HEIGHT;
+    fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_NV12;
+    fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
+    fmt.fmt.pix_mp.num_planes = 1;
     
     if (ioctl(cam_fd, VIDIOC_S_FMT, &fmt) < 0) {
         perror("设置摄像头格式失败");
@@ -132,10 +137,9 @@ int main() {
     }
     
     // 申请缓冲区
-    struct v4l2_requestbuffers req;
     memset(&req, 0, sizeof(req));
     req.count = 1;
-    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.type = buf_type;
     req.memory = V4L2_MEMORY_MMAP;
     
     if (ioctl(cam_fd, VIDIOC_REQBUFS, &req) < 0) {
@@ -145,11 +149,13 @@ int main() {
     }
     
     // 映射缓冲区
-    struct v4l2_buffer buf;
     memset(&buf, 0, sizeof(buf));
-    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    memset(planes, 0, sizeof(planes));
+    buf.type = buf_type;
     buf.memory = V4L2_MEMORY_MMAP;
     buf.index = 0;
+    buf.length = 1;
+    buf.m.planes = planes;
     
     if (ioctl(cam_fd, VIDIOC_QUERYBUF, &buf) < 0) {
         perror("查询缓冲区失败");
@@ -157,8 +163,9 @@ int main() {
         return -1;
     }
     
-    yuv_buffer = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, 
-                      MAP_SHARED, cam_fd, buf.m.offset);
+    yuv_mmap_len = buf.m.planes[0].length;
+    yuv_buffer = mmap(NULL, yuv_mmap_len, PROT_READ | PROT_WRITE,
+                      MAP_SHARED, cam_fd, buf.m.planes[0].m.mem_offset);
     if (yuv_buffer == MAP_FAILED) {
         perror("映射缓冲区失败");
         close(cam_fd);
@@ -216,11 +223,20 @@ int main() {
     init_yuv_table();
     
     // 开始捕获
-    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.type = buf_type;
     buf.memory = V4L2_MEMORY_MMAP;
     buf.index = 0;
+    buf.length = 1;
+    buf.m.planes = planes;
+
+    if (ioctl(cam_fd, VIDIOC_QBUF, &buf) < 0) {
+        perror("入队初始缓冲区失败");
+        close(cam_fd);
+        close(fb_fd);
+        return -1;
+    }
     
-    if (ioctl(cam_fd, VIDIOC_STREAMON, &buf.type) < 0) {
+    if (ioctl(cam_fd, VIDIOC_STREAMON, &buf_type) < 0) {
         perror("开始捕获失败");
         close(cam_fd);
         close(fb_fd);
@@ -237,18 +253,25 @@ int main() {
         clock_gettime(CLOCK_MONOTONIC, &start);
         
         // 捕获一帧
-        if (ioctl(cam_fd, VIDIOC_QBUF, &buf) < 0) {
-            perror("入队缓冲区失败");
-            break;
-        }
-        
+        memset(planes, 0, sizeof(planes));
+        buf.type = buf_type;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = 0;
+        buf.length = 1;
+        buf.m.planes = planes;
+
         if (ioctl(cam_fd, VIDIOC_DQBUF, &buf) < 0) {
             perror("出队缓冲区失败");
             break;
         }
-        
-        // 转换YUV到RGB
-        yuv420_to_rgb24_fast(yuv_buffer, rgb_buffer, 
+
+        if (ioctl(cam_fd, VIDIOC_QBUF, &buf) < 0) {
+            perror("入队缓冲区失败");
+            break;
+        }
+
+        // 转换NV12到RGB
+        nv12_to_rgb24_fast(yuv_buffer, rgb_buffer,
                             SOURCE_WIDTH, SOURCE_HEIGHT);
         
         // 裁剪到目标尺寸
@@ -305,8 +328,8 @@ int main() {
     }
     
     // 清理
-    ioctl(cam_fd, VIDIOC_STREAMOFF, &buf.type);
-    munmap(yuv_buffer, buf.length);
+    ioctl(cam_fd, VIDIOC_STREAMOFF, &buf_type);
+    munmap(yuv_buffer, yuv_mmap_len);
     munmap(framebuffer, finfo.smem_len);
     free(rgb_buffer);
     free(cropped_buffer);

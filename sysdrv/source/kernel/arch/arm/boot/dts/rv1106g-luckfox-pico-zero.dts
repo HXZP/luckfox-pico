@@ -64,12 +64,12 @@
 		status = "disabled";
 	};
 
-	out_osc_sc3336: out-osc-sc3336 {
-		compatible = "fixed-clock";
-		clock-output-names = "out-osc-sc3336";
-		clock-frequency = <24000000>;
-		#clock-cells = <0>;
-	};
+	// out_osc_sc3336: out-osc-sc3336 {
+	// 	compatible = "fixed-clock";
+	// 	clock-output-names = "out-osc-sc3336";
+	// 	clock-frequency = <24000000>;
+	// 	#clock-cells = <0>;
+	// };
 
 	cam_ircut0: cam_ircut {
 		status = "disabled";
@@ -310,7 +310,7 @@
 		compatible = "smartsens,sc3336";
 		status = "okay";
 		reg = <0x30>;
-		clocks = <&out_osc_sc3336>;
+		clocks = <&cru MCLK_REF_MIPI0>;
 		clock-names = "xvclk";
 		pwdn-gpios = <&gpio3 RK_PC5 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
