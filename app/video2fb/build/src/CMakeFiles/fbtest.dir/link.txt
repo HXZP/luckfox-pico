@@ -1,1 +1,0 @@
-/home/hxzp/luckfox-zero/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc  -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard -O2 -Wall -ffunction-sections -fdata-sections -O3 -DNDEBUG  -Wl,--gc-sections CMakeFiles/fbtest.dir/fbtest.c.o -o ../bin/fbtest  -lm 
