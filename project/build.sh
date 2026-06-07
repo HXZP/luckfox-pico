@@ -2521,6 +2521,21 @@ function __RUN_POST_BUILD_USERDATA_SCRIPT() {
 	fi
 }
 
+function __SYNC_OUTPUT_IMAGE() {
+	check_config RK_OUTPUT_IMAGE_SYNC_DIR || return 0
+
+	local sync_dir
+	sync_dir="$RK_OUTPUT_IMAGE_SYNC_DIR"
+
+	if [ -z "$sync_dir" ]; then
+		return 0
+	fi
+
+	mkdir -p "$sync_dir"
+	rsync -a --delete "${RK_PROJECT_OUTPUT_IMAGE}/" "${sync_dir}/"
+	msg_info "Synced output image to: $sync_dir"
+}
+
 function build_firmware() {
 	check_config RK_PARTITION_CMD_IN_ENV || return 0
 
@@ -2611,6 +2626,8 @@ function build_firmware() {
 		msg_info "MEDIUM SD_CARD Package firmware"
 		$PACK_TOOL_PATH/lf_blkenvpackage --trim -i ${RK_PROJECT_OUTPUT_IMAGE} -o ${RK_PROJECT_OUTPUT_IMAGE}/sd_update.img
 	fi
+
+	__SYNC_OUTPUT_IMAGE
 
 	finish_build
 }

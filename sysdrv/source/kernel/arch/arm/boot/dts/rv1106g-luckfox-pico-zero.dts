@@ -194,6 +194,12 @@
 	};
 };
 
+&uart0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0m0_xfer>;
+};
+
 &uart3 {
 	status = "disabled";
 };
