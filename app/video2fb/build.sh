@@ -15,6 +15,39 @@ NC='\033[0m' # No Color
 PROJECT_DIR=$(pwd)
 BUILD_DIR="${PROJECT_DIR}/build"
 TOOLCHAIN_FILE="${PROJECT_DIR}/toolchain.cmake"
+WORKSPACE_ROOT="$(cd "${PROJECT_DIR}/../.." && pwd)"
+DOCKER_IMAGE="${DOCKER_IMAGE:-luckfoxtech/luckfox_pico:1.0}"
+
+# 本机缺少构建工具时，自动切换到 Docker 环境编译
+if [ "${IN_DOCKER_BUILD:-0}" != "1" ]; then
+    if ! command -v cmake >/dev/null 2>&1 || ! command -v make >/dev/null 2>&1; then
+        echo -e "${YELLOW}本机缺少 cmake 或 make，切换到 Docker 编译...${NC}"
+
+        if ! command -v docker >/dev/null 2>&1; then
+            echo -e "${RED}错误: 未找到 docker，请先安装 Docker 或进入已有 Docker 环境编译${NC}"
+            exit 1
+        fi
+
+        DOCKER_CMD=(docker)
+        if ! docker info >/dev/null 2>&1; then
+            if [ -t 0 ]; then
+                DOCKER_CMD=(sudo docker)
+            else
+                echo -e "${RED}错误: 当前用户没有 Docker 权限，请使用交互式终端运行 ./build.sh 或执行 sudo ./build.sh${NC}"
+                exit 1
+            fi
+        fi
+
+        "${DOCKER_CMD[@]}" run --rm \
+            -v "${WORKSPACE_ROOT}:${WORKSPACE_ROOT}" \
+            -w "${PROJECT_DIR}" \
+            -e IN_DOCKER_BUILD=1 \
+            -e TOOLCHAIN_PATH="${WORKSPACE_ROOT}/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf" \
+            "${DOCKER_IMAGE}" \
+            bash -lc "./build.sh"
+        exit $?
+    fi
+fi
 
 # 清理旧构建
 if [ -d "${BUILD_DIR}" ]; then

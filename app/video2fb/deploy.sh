@@ -8,9 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}" && pwd)"
 LOCAL_BUILD_DIR="${PROJECT_DIR}/build/bin"
 REMOTE_USER="root"
-REMOTE_HOST="192.168.2.16"  # 修改为你的开发板IP
+REMOTE_HOST="10.8.49.116"  # 修改为你的开发板IP
 REMOTE_DIR="/duck"
-REMOTE_PASSWORD="luckfox"
+REMOTE_PASSWORD="hxzp"
 
 # 颜色
 GREEN='\033[0;32m'

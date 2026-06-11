@@ -12,3 +12,6 @@ sysdrv/tools/board/dosfstools/dosfstools-4.2/
 # Ignore all build output under app
 app/**/build/
 app/**/build
+
+# RKNN-Toolkit2 本地环境目录
+.rknn/
