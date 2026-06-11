@@ -130,4 +130,4 @@ export RK_PRE_BUILD_USERDATA_SCRIPT=luckfox-userdata-pre.sh
 export RK_POST_OVERLAY="overlay-luckfox-config overlay-luckfox-buildroot-init overlay-luckfox-buildroot-shadow overlay-luckfox-buildroot-duck"
 
 # auto sync generated images to Windows path after firmware build
-export RK_OUTPUT_IMAGE_SYNC_DIR="/mnt/f/Aproject/luckfork/wsl-zero-image"
+export RK_OUTPUT_IMAGE_SYNC_DIR="__WINDOWS_DESKTOP__/luckfox-zero-image"

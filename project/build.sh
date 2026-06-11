@@ -2521,19 +2521,56 @@ function __RUN_POST_BUILD_USERDATA_SCRIPT() {
 	fi
 }
 
-function __SYNC_OUTPUT_IMAGE() {
-	check_config RK_OUTPUT_IMAGE_SYNC_DIR || return 0
-
+function __RESOLVE_OUTPUT_IMAGE_SYNC_DIR() {
 	local sync_dir
+	local desktop_marker
+	local windows_userprofile
+	local linux_userprofile
+	local linux_desktop
+
 	sync_dir="$RK_OUTPUT_IMAGE_SYNC_DIR"
+	desktop_marker="__WINDOWS_DESKTOP__"
 
 	if [ -z "$sync_dir" ]; then
+		return 1
+	fi
+
+	if [[ "$sync_dir" != ${desktop_marker}* ]]; then
+		printf '%s\n' "$sync_dir"
 		return 0
 	fi
 
-	mkdir -p "$sync_dir"
-	rsync -a --delete "${RK_PROJECT_OUTPUT_IMAGE}/" "${sync_dir}/"
-	msg_info "Synced output image to: $sync_dir"
+	if ! command -v cmd.exe >/dev/null 2>&1 || ! command -v wslpath >/dev/null 2>&1; then
+		return 1
+	fi
+
+	windows_userprofile=$(cmd.exe /C "echo %USERPROFILE%" 2>/dev/null | tr -d '\r' | tail -n 1)
+	if [ -z "$windows_userprofile" ]; then
+		return 1
+	fi
+
+	linux_userprofile=$(wslpath "$windows_userprofile" 2>/dev/null) || return 1
+	linux_desktop="${linux_userprofile}/Desktop"
+	sync_dir="${sync_dir/__WINDOWS_DESKTOP__/${linux_desktop}}"
+
+	printf '%s\n' "$sync_dir"
+}
+
+function __SYNC_OUTPUT_IMAGE() {
+	local sync_dir
+	sync_dir=$(__RESOLVE_OUTPUT_IMAGE_SYNC_DIR)
+
+	if [ -z "$sync_dir" ]; then
+		msg_warn "Skip syncing output image because sync path could not be resolved."
+		return 0
+	fi
+
+	if mkdir -p "$sync_dir" && rsync -a --delete "${RK_PROJECT_OUTPUT_IMAGE}/" "${sync_dir}/"; then
+		msg_info "Synced output image to: $sync_dir"
+		return 0
+	fi
+
+	msg_warn "Sync output image failed: $sync_dir"
 }
 
 function build_firmware() {
