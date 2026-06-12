@@ -15,3 +15,17 @@ app/**/build
 
 # RKNN-Toolkit2 本地环境目录
 .rknn/
+
+# RKNN 示例构建、部署和测试输出
+app/luckfox_pico_rknn_example/build_yolov5_save_check/
+app/luckfox_pico_rknn_example/install/
+app/luckfox_pico_rknn_example/output/
+app/luckfox_pico_rknn_example/scripts/luckfox_onnx_to_rknn/model/
+app/luckfox_pico_rknn_example/example/*/model/*.rknn
+app/luckfox_pico_rknn_example/**/*.onnx
+app/luckfox_pico_rknn_example/**/*.pt
+app/luckfox_pico_rknn_example/**/*.pth
+
+# 临时下载的模型训练/导出源码仓库
+app/retinaface-pytorch/
+app/yolov5/

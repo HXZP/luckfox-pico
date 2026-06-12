@@ -32,6 +32,7 @@ TORCH_VERSION="2.4.0+cpu"
 OPENCV_VERSION="4.11.0.86"
 NUMPY_VERSION="1.26.4"
 PROTOBUF_VERSION="4.25.4"
+ONNX_VERSION="1.16.1"
 PYPI_MIRROR="${PYPI_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 MINICONDA_URL="${MINICONDA_URL:-https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh}"
 MINICONDA_INSTALLER="${RKNN_DIR}/Miniconda3-latest-Linux-x86_64.sh"
@@ -139,7 +140,7 @@ install_rknn_packages()
         tqdm \
         "opencv-python==${OPENCV_VERSION}" \
         fast-histogram \
-        "onnx>=1.16.1" \
+        "onnx==${ONNX_VERSION}" \
         "onnxruntime>=1.10.0"
 
     log_info "安装 rknn-toolkit2：${RKNN_TOOLKIT_VERSION}"
@@ -168,6 +169,8 @@ print("torch", torch.__version__)
 print("cv2", cv2.__version__)
 print("onnx", onnx.__version__)
 print("onnxruntime", ort.__version__)
+if not hasattr(onnx, "mapping"):
+    raise RuntimeError("当前 onnx 版本缺少 onnx.mapping，无法兼容 rknn-toolkit2。")
 PY
 
     run_in_env python -m pip check
