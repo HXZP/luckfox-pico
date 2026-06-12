@@ -27,6 +27,11 @@
 
 #include <errno.h>
 #include <unistd.h>   
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -49,6 +54,15 @@
 #define USE_DMA 0
 #define SAVE_RESULT_DIR "./detect_result"
 #define SAVE_PATH_MAX_LEN 256
+#define MJPEG_STREAM_PORT 8080
+#define MJPEG_JPEG_QUALITY 80
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+static pthread_mutex_t g_mjpeg_mutex = PTHREAD_MUTEX_INITIALIZER;
+static std::vector<uchar> g_mjpeg_frame;
 
 // 将模型输入坐标映射回原始显示图像坐标。
 void mapCoordinates(cv::Mat input, cv::Mat output, int *x, int *y)
@@ -151,6 +165,190 @@ static int save_detect_image(const char *save_dir, int save_index, int cls_id, c
     return 0;
 }
 
+// 将完整缓冲区发送到客户端，避免短写导致 MJPEG 分片损坏。
+static int send_all(int fd, const void *data, size_t data_len)
+{
+    const char *send_ptr;
+    size_t remain_len;
+
+    send_ptr = (const char *)data;
+    remain_len = data_len;
+
+    while (remain_len > 0)
+    {
+        ssize_t send_len;
+
+        send_len = send(fd, send_ptr, remain_len, MSG_NOSIGNAL);
+        if (send_len <= 0)
+        {
+            return -1;
+        }
+
+        send_ptr += send_len;
+        remain_len -= send_len;
+    }
+
+    return 0;
+}
+
+// 更新 HTTP MJPEG 服务使用的最新一帧 JPEG 数据。
+static int update_mjpeg_frame(const cv::Mat &image)
+{
+    std::vector<int> encode_params;
+    std::vector<uchar> jpeg_buffer;
+
+    encode_params.push_back(cv::IMWRITE_JPEG_QUALITY);
+    encode_params.push_back(MJPEG_JPEG_QUALITY);
+
+    if (!cv::imencode(".jpg", image, jpeg_buffer, encode_params))
+    {
+        printf("encode mjpeg frame failed\n");
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_mjpeg_mutex);
+    g_mjpeg_frame.swap(jpeg_buffer);
+    pthread_mutex_unlock(&g_mjpeg_mutex);
+
+    return 0;
+}
+
+// 向单个 HTTP 客户端持续输出 multipart MJPEG 图像流。
+static void stream_mjpeg_client(int client_fd)
+{
+    char request_buffer[512];
+    const char *http_header =
+        "HTTP/1.0 200 OK\r\n"
+        "Server: luckfox-yolov5-save\r\n"
+        "Cache-Control: no-cache\r\n"
+        "Pragma: no-cache\r\n"
+        "Connection: close\r\n"
+        "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+        "\r\n";
+
+    recv(client_fd, request_buffer, sizeof(request_buffer), 0);
+
+    if (send_all(client_fd, http_header, strlen(http_header)) != 0)
+    {
+        return;
+    }
+
+    while (1)
+    {
+        char part_header[128];
+        std::vector<uchar> frame_copy;
+
+        pthread_mutex_lock(&g_mjpeg_mutex);
+        frame_copy = g_mjpeg_frame;
+        pthread_mutex_unlock(&g_mjpeg_mutex);
+
+        if (frame_copy.empty())
+        {
+            usleep(100 * 1000);
+            continue;
+        }
+
+        snprintf(part_header,
+                 sizeof(part_header),
+                 "--frame\r\n"
+                 "Content-Type: image/jpeg\r\n"
+                 "Content-Length: %zu\r\n"
+                 "\r\n",
+                 frame_copy.size());
+
+        if (send_all(client_fd, part_header, strlen(part_header)) != 0)
+        {
+            break;
+        }
+
+        if (send_all(client_fd, frame_copy.data(), frame_copy.size()) != 0)
+        {
+            break;
+        }
+
+        if (send_all(client_fd, "\r\n", 2) != 0)
+        {
+            break;
+        }
+
+        usleep(100 * 1000);
+    }
+}
+
+// 后台 HTTP 服务线程，浏览器访问 /stream.mjpg 即可查看带识别框画面。
+static void *mjpeg_server_thread(void *arg)
+{
+    int server_fd;
+    int enable;
+    struct sockaddr_in server_addr;
+
+    (void)arg;
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0)
+    {
+        printf("create mjpeg socket failed, errno=%d\n", errno);
+        return NULL;
+    }
+
+    enable = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_addr.sin_port = htons(MJPEG_STREAM_PORT);
+
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0)
+    {
+        printf("bind mjpeg port %d failed, errno=%d\n", MJPEG_STREAM_PORT, errno);
+        close(server_fd);
+        return NULL;
+    }
+
+    if (listen(server_fd, 2) != 0)
+    {
+        printf("listen mjpeg port %d failed, errno=%d\n", MJPEG_STREAM_PORT, errno);
+        close(server_fd);
+        return NULL;
+    }
+
+    printf("mjpeg stream url: http://0.0.0.0:%d/stream.mjpg\n", MJPEG_STREAM_PORT);
+
+    while (1)
+    {
+        int client_fd;
+
+        client_fd = accept(server_fd, NULL, NULL);
+        if (client_fd < 0)
+        {
+            continue;
+        }
+
+        stream_mjpeg_client(client_fd);
+        close(client_fd);
+    }
+
+    close(server_fd);
+    return NULL;
+}
+
+// 启动 MJPEG HTTP 串流服务。
+static int start_mjpeg_server()
+{
+    pthread_t thread_id;
+    int ret;
+
+    ret = pthread_create(&thread_id, NULL, mjpeg_server_thread, NULL);
+    if (ret != 0)
+    {
+        printf("start mjpeg server failed, ret=%d\n", ret);
+        return -1;
+    }
+
+    pthread_detach(thread_id);
+    return 0;
+}
+
 /*-------------------------------------------
                   Main Function
 -------------------------------------------*/
@@ -161,6 +359,7 @@ int main(int argc, char **argv)
         printf("%s <yolov5 model_path>\n", argv[0]);
         return -1;
     }
+    signal(SIGPIPE, SIG_IGN);
     system("RkLunch-stop.sh");
     const char *model_path = argv[1];
 
@@ -188,6 +387,7 @@ int main(int argc, char **argv)
     {
         save_enable = 1;
     }
+    start_mjpeg_server();
 
     //Init fb
     int disp_flag = 0;
@@ -293,13 +493,13 @@ int main(int argc, char **argv)
             }
         }
 
-        if(disp_flag){
-            //Fps Show
-            sprintf(text,"fps=%.1f",fps); 
-            cv::putText(bgr,text,cv::Point(0, 20),
-                        cv::FONT_HERSHEY_SIMPLEX,0.5,
-                        cv::Scalar(0,255,0),1);
+        sprintf(text,"fps=%.1f",fps); 
+        cv::putText(bgr,text,cv::Point(0, 20),
+                    cv::FONT_HERSHEY_SIMPLEX,0.5,
+                    cv::Scalar(0,255,0),1);
+        update_mjpeg_frame(bgr);
 
+        if(disp_flag){
             //LCD Show
             if( pixel_size == 4 )
                 cv::cvtColor(bgr, disp, cv::COLOR_BGR2BGRA);
