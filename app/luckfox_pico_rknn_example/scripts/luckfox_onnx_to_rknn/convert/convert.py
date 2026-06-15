@@ -23,11 +23,11 @@ if __name__ == '__main__':
     # Pre-process config
     print('--> Config model')
     if model_type == 'Retinaface':
-        rknn.config(mean_values=[[104, 117, 123]], std_values=[[1, 1, 1]], target_platform='rv1103',
+        rknn.config(mean_values=[[104, 117, 123]], std_values=[[1, 1, 1]], target_platform='rv1106',
                                 quantized_algorithm="normal", quant_img_RGB2BGR=True,optimization_level=0)
         print("Use retinaface mode")
     else:
-        rknn.config(mean_values=[[0, 0, 0]], std_values=[[255, 255, 255]], target_platform='rv1103')
+        rknn.config(mean_values=[[0, 0, 0]], std_values=[[255, 255, 255]], target_platform='rv1106')
     
     print('done')
 

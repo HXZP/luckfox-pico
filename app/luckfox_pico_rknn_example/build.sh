@@ -37,7 +37,10 @@ done
 options=("luckfox_pico_retinaface_facenet"
 	"luckfox_pico_retinaface_facenet_spidev"
 	"luckfox_pico_yolov5"
-	"luckfox_pico_yolov5_save")
+	"luckfox_pico_yolov5_save"
+	"luckfox_pico_yolov5_save_origin"
+	"luckfox_pico_yolov5_save_realtime_check"
+	"luckfox_pico_yolov5_image")
 
 options_device=("LUCKFOX_PICO_PLUS"
 	"LUCKFOX_PICO_PRO_MAX")

@@ -56,6 +56,7 @@
 #define SAVE_PATH_MAX_LEN 256
 #define MJPEG_STREAM_PORT 8080
 #define MJPEG_JPEG_QUALITY 80
+#define YOLO_STATUS_LOG_INTERVAL 30
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -354,6 +355,9 @@ static int start_mjpeg_server()
 -------------------------------------------*/
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     if (argc != 2)
     {
         printf("%s <yolov5 model_path>\n", argv[0]);
@@ -369,6 +373,7 @@ int main(int argc, char **argv)
     float fps = 0;
     int save_index = 0;
     int save_enable = 0;
+    unsigned int frame_index = 0;
     std::set<int> saved_class_ids;
 
     //Model Input (Yolov5)
@@ -452,10 +457,26 @@ int main(int argc, char **argv)
 
         start_time = clock();
         cap >> bgr;
+        frame_index++;
 
-        //letterbox
+        // 每帧提交 NPU，并清空旧结果，保证日志和画面只反映本帧真实检测结果。
+        memset(&od_results, 0, sizeof(object_detect_result_list));
         cv::resize(bgr, bgr_model_input, cv::Size(model_width,model_height), 0, 0, cv::INTER_LINEAR);
-        inference_yolov5_model(&rknn_app_ctx, &od_results);
+        ret = inference_yolov5_model(&rknn_app_ctx, &od_results);
+        if (ret != 0)
+        {
+            if ((frame_index % YOLO_STATUS_LOG_INTERVAL) == 0)
+            {
+                printf("frame %u inference failed, ret=%d\n", frame_index, ret);
+            }
+        }
+        else if (od_results.count == 0)
+        {
+            if ((frame_index % YOLO_STATUS_LOG_INTERVAL) == 0)
+            {
+                printf("frame %u detect count=0\n", frame_index);
+            }
+        }
 
         // Add rectangle and probability
         for (int i = 0; i < od_results.count; i++)
@@ -512,7 +533,11 @@ int main(int argc, char **argv)
         }
         //Update Fps
         end_time = clock();
-        fps= (float) (CLOCKS_PER_SEC / (end_time - start_time)) ;
+        clock_t elapsed_time = end_time - start_time;
+        if (elapsed_time > 0)
+        {
+            fps = (float)CLOCKS_PER_SEC / (float)elapsed_time;
+        }
         //printf("%s\n",text);
         memset(text,0,sizeof(text)); 
     }

@@ -1,0 +1,6 @@
+/home/hxzp/luckfox-pico/app/rknn/install/uclibc/yolo_fb_timeshare/yolo_fb_timeshare
+/home/hxzp/luckfox-pico/app/rknn/install/uclibc/yolo_fb_timeshare/run.sh
+/home/hxzp/luckfox-pico/app/rknn/install/uclibc/yolo_fb_timeshare/model/anchors_yolov5.txt
+/home/hxzp/luckfox-pico/app/rknn/install/uclibc/yolo_fb_timeshare/model/coco_80_labels_list.txt
+/home/hxzp/luckfox-pico/app/rknn/install/uclibc/yolo_fb_timeshare/model/yolov5.rknn
+/home/hxzp/luckfox-pico/app/rknn/install/uclibc/yolo_fb_timeshare/lib/librga.so

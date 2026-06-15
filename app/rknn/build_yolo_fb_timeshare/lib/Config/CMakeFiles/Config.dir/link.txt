@@ -1,0 +1,2 @@
+/home/hxzp/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-ar qc libConfig.a CMakeFiles/Config.dir/DEV_Config.cc.o
+/home/hxzp/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-ranlib libConfig.a
