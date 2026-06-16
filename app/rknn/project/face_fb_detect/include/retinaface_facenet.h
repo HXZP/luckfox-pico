@@ -73,7 +73,7 @@ typedef struct {
     rknn_tensor_attr* output_attrs;
 #if defined(RV1106_1103) 
     rknn_tensor_mem* input_mems[1];
-    rknn_tensor_mem* output_mems[3];
+    rknn_tensor_mem* output_mems[9];
     rknn_dma_buf img_dma_buf;
 #endif
     int model_channel;

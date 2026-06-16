@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 #include "retinaface_facenet.h"
 
@@ -23,6 +24,15 @@
 
 #define USE_RKNN_MEM_SHARE 0
 
+
+// 获取单调时钟毫秒值，用于统计 RKNN 推理耗时。
+static long long get_retinaface_monotonic_ms()
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 
 int clamp(float x, int min, int max) {
@@ -88,7 +98,7 @@ int init_retinaface_model(const char *model_path, rknn_app_context_t *app_ctx)
     {
         output_attrs[i].index = i;
         //When using the zero-copy API interface, query the native output tensor attribute
-        ret = rknn_query(ctx, RKNN_QUERY_NATIVE_NHWC_OUTPUT_ATTR, &(output_attrs[i]), sizeof(rknn_tensor_attr));
+        ret = rknn_query(ctx, RKNN_QUERY_NATIVE_OUTPUT_ATTR, &(output_attrs[i]), sizeof(rknn_tensor_attr));
         if (ret != RKNN_SUCC)
         {
             printf("rknn_query fail! ret=%d\n", ret);
@@ -263,7 +273,7 @@ int init_retinaface_facenet_model(const char *model_path, const char *model_path
         output_attrs[i].index = i;
         //When using the zero-copy API interface, query the native output tensor attribute
         ret = rknn_query(ctx_retinaface,
-                        RKNN_QUERY_NATIVE_NHWC_OUTPUT_ATTR,
+                        RKNN_QUERY_NATIVE_OUTPUT_ATTR,
                         &(output_attrs[i]),
                         sizeof(rknn_tensor_attr));
         if (ret != RKNN_SUCC)
@@ -550,88 +560,169 @@ static int8_t qnt_f32_to_affine(float f32, int32_t zp, float scale)
 
 static float deqnt_affine_to_f32(int8_t qnt, int32_t zp, float scale) { return ((float)qnt - (float)zp) * scale; }
 
+// 按 NC1HWC2 布局读取量化输出，并反量化为 float。
+static float read_nc1hwc2_output(const int8_t *data,
+                                 int channel,
+                                 int y,
+                                 int x,
+                                 int height,
+                                 int width,
+                                 int32_t zp,
+                                 float scale)
+{
+    const int channel_pack = 16;
+    int channel_group;
+    int channel_offset;
+    int index;
+
+    channel_group = channel / channel_pack;
+    channel_offset = channel % channel_pack;
+    index = ((channel_group * height * width + y * width + x) * channel_pack) + channel_offset;
+    return deqnt_affine_to_f32(data[index], zp, scale);
+}
+
 int inference_retinaface_model(rknn_app_context_t *app_ctx, object_detect_result_list *od_results)
 {
     int ret;
+    long long run_start_ms;
+    long long run_end_ms;
+
+    run_start_ms = get_retinaface_monotonic_ms();
     ret = rknn_run(app_ctx->rknn_ctx, nullptr);
-    if (ret < 0) {
+    run_end_ms = get_retinaface_monotonic_ms();
+    printf("retinaface_rknn_run_ms=%lld ret=%d\n", run_end_ms - run_start_ms, ret);
+    if (ret < 0)
+    {
         printf("rknn_run fail! ret=%d\n", ret);
         return -1;
     }
-    
-    uint8_t *location =   (uint8_t *)(app_ctx->output_mems[0]->virt_addr);
-    uint8_t *scores   =   (uint8_t *)(app_ctx->output_mems[1]->virt_addr);
-    uint8_t *landms   =   (uint8_t *)(app_ctx->output_mems[2]->virt_addr);
-
-    //printf("%d %d %d %d\n",location[320],location[321],location[322],location[323]);
-
     const float (*prior_ptr)[4];
     int num_priors = 16800;
     prior_ptr = BOX_PRIORS_640;
     
-    int filter_indices[num_priors];
-    float props[num_priors]; //储存priors的分数 
-    uint32_t location_size = app_ctx->output_mems[0]->size; 
-    uint32_t landms_size = app_ctx->output_mems[2]->size; 
-    float loc_fp32[location_size]; 
-    float landms_fp32[landms_size];
-    memset(loc_fp32, 0,sizeof(float)*location_size);
-    memset(filter_indices, 0, sizeof(int)*num_priors);
-    memset(props, 0, sizeof(float)*num_priors);
+    int *filter_indices = (int *)malloc(sizeof(int) * num_priors);
+    float *props = (float *)malloc(sizeof(float) * num_priors);
+    float *loc_fp32 = (float *)malloc(sizeof(float) * num_priors * 4);
+    float *landms_fp32 = (float *)malloc(sizeof(float) * num_priors * 10);
+    if (filter_indices == NULL || props == NULL || loc_fp32 == NULL || landms_fp32 == NULL)
+    {
+        printf("malloc retinaface postprocess buffer failed\n");
+        free(filter_indices);
+        free(props);
+        free(loc_fp32);
+        free(landms_fp32);
+        return -1;
+    }
+
+    memset(loc_fp32, 0, sizeof(float) * num_priors * 4);
+    memset(landms_fp32, 0, sizeof(float) * num_priors * 10);
+    memset(filter_indices, 0, sizeof(int) * num_priors);
+    memset(props, 0, sizeof(float) * num_priors);
 
     int validCount = 0;
     const float VARIANCES[2] = {0.1, 0.2};
 
-    //将预设值转换为f32 用于output[0]
+    const int feature_widths[3] = {80, 40, 20};
+    const int feature_heights[3] = {80, 40, 20};
+    int prior_index = 0;
 
-    int loc_zp =            app_ctx->output_attrs[0].zp; 
-    float loc_scale =       app_ctx->output_attrs[0].scale;
-
-    int scores_zp =         app_ctx->output_attrs[1].zp;    
-    float scores_scale =    app_ctx->output_attrs[1].scale;
-
-    int landms_zp =         app_ctx->output_attrs[2].zp;    
-    float landms_scale =    app_ctx->output_attrs[2].scale;
-
-    //box_process
-    for(int i = 0;i < num_priors; i++)
+    // NCHW 输出顺序：bbox 三层、score 三层、landmark 三层。
+    for (int level = 0; level < 3; level++)
     {
-        float face_score = deqnt_affine_to_f32(scores[i*2+1], scores_zp, scores_scale);
-        if (face_score >  0.5)//获取全部的bbox的数据
-        {
-            //printf("i = %d , face_score = %f\n",i,face_score);
-            filter_indices[validCount] = i;
-            props[validCount] = face_score; //储存
-            int offset = i*4;
-            uint8_t *bbox = location + offset;
-            
-            float box_x = ( deqnt_affine_to_f32(bbox[0],loc_zp,loc_scale)) * VARIANCES[0] * prior_ptr[i][2] + prior_ptr[i][0];
-            float box_y = ( deqnt_affine_to_f32(bbox[1],loc_zp,loc_scale)) * VARIANCES[0] * prior_ptr[i][3] + prior_ptr[i][1];
-            float box_w = (float) expf(( deqnt_affine_to_f32(bbox[2],loc_zp,loc_scale)) * VARIANCES[1]) * prior_ptr[i][2];
-            float box_h = (float) expf(( deqnt_affine_to_f32(bbox[3],loc_zp,loc_scale)) * VARIANCES[1]) * prior_ptr[i][3];
-    
-            float xmin = box_x - box_w * 0.5f;
-            float ymin = box_y - box_h * 0.5f;
-            float xmax = xmin + box_w;
-            float ymax = ymin + box_h;
+        int width = feature_widths[level];
+        int height = feature_heights[level];
+        int bbox_output_index = level;
+        int score_output_index = level + 3;
+        int landmark_output_index = level + 6;
+        int loc_zp = app_ctx->output_attrs[bbox_output_index].zp;
+        float loc_scale = app_ctx->output_attrs[bbox_output_index].scale;
+        int scores_zp = app_ctx->output_attrs[score_output_index].zp;
+        float scores_scale = app_ctx->output_attrs[score_output_index].scale;
+        int landms_zp = app_ctx->output_attrs[landmark_output_index].zp;
+        float landms_scale = app_ctx->output_attrs[landmark_output_index].scale;
+        const int8_t *location = (const int8_t *)(app_ctx->output_mems[bbox_output_index]->virt_addr);
+        const int8_t *scores = (const int8_t *)(app_ctx->output_mems[score_output_index]->virt_addr);
+        const int8_t *landms = (const int8_t *)(app_ctx->output_mems[landmark_output_index]->virt_addr);
 
-            loc_fp32[offset + 0] = xmin;
-            loc_fp32[offset + 1] = ymin;
-            loc_fp32[offset + 2] = xmax;
-            loc_fp32[offset + 3] = ymax;
-            for(int j = 0; j < 5;j++)
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
             {
-                landms_fp32[i * 10 + 2 * j] = deqnt_affine_to_f32(landms[i * 10 + 2 * j],landms_zp,landms_scale)
-                                         * VARIANCES[0] * prior_ptr[i][2] + prior_ptr[i][0];
-                landms_fp32[i * 10 + 2 * j + 1] = deqnt_affine_to_f32(landms[i * 10 + 2 * j + 1],landms_zp,landms_scale)
-                                         * VARIANCES[0] * prior_ptr[i][3] + prior_ptr[i][1];
+                for (int anchor_id = 0; anchor_id < 2; anchor_id++)
+                {
+                    float face_score;
+                    int offset;
+
+                    face_score = read_nc1hwc2_output(scores,
+                                                     anchor_id * 2 + 1,
+                                                     y,
+                                                     x,
+                                                     height,
+                                                     width,
+                                                     scores_zp,
+                                                     scores_scale);
+                    if (face_score > 0.5)
+                    {
+                        float box_x;
+                        float box_y;
+                        float box_w;
+                        float box_h;
+                        float xmin;
+                        float ymin;
+                        float xmax;
+                        float ymax;
+
+                        filter_indices[validCount] = prior_index;
+                        props[validCount] = face_score;
+                        offset = prior_index * 4;
+
+                        box_x = read_nc1hwc2_output(location, anchor_id * 4 + 0, y, x, height, width, loc_zp, loc_scale)
+                                * VARIANCES[0] * prior_ptr[prior_index][2] + prior_ptr[prior_index][0];
+                        box_y = read_nc1hwc2_output(location, anchor_id * 4 + 1, y, x, height, width, loc_zp, loc_scale)
+                                * VARIANCES[0] * prior_ptr[prior_index][3] + prior_ptr[prior_index][1];
+                        box_w = expf(read_nc1hwc2_output(location, anchor_id * 4 + 2, y, x, height, width, loc_zp, loc_scale)
+                                     * VARIANCES[1]) * prior_ptr[prior_index][2];
+                        box_h = expf(read_nc1hwc2_output(location, anchor_id * 4 + 3, y, x, height, width, loc_zp, loc_scale)
+                                     * VARIANCES[1]) * prior_ptr[prior_index][3];
+
+                        xmin = box_x - box_w * 0.5f;
+                        ymin = box_y - box_h * 0.5f;
+                        xmax = xmin + box_w;
+                        ymax = ymin + box_h;
+
+                        loc_fp32[offset + 0] = xmin;
+                        loc_fp32[offset + 1] = ymin;
+                        loc_fp32[offset + 2] = xmax;
+                        loc_fp32[offset + 3] = ymax;
+                        for (int j = 0; j < 5; j++)
+                        {
+                            landms_fp32[prior_index * 10 + 2 * j] =
+                                read_nc1hwc2_output(landms, anchor_id * 10 + 2 * j, y, x, height, width, landms_zp, landms_scale)
+                                * VARIANCES[0] * prior_ptr[prior_index][2] + prior_ptr[prior_index][0];
+                            landms_fp32[prior_index * 10 + 2 * j + 1] =
+                                read_nc1hwc2_output(landms, anchor_id * 10 + 2 * j + 1, y, x, height, width, landms_zp, landms_scale)
+                                * VARIANCES[0] * prior_ptr[prior_index][3] + prior_ptr[prior_index][1];
+                        }
+
+                        ++validCount;
+                    }
+
+                    prior_index++;
+                }
             }
-      
-            ++validCount;
         }
     }
 
-    
+    if (validCount <= 0)
+    {
+        od_results->count = 0;
+        free(filter_indices);
+        free(props);
+        free(loc_fp32);
+        free(landms_fp32);
+        return ret;
+    }
+
     //快速排列
     quick_sort_indice_inverse(props, 0, validCount - 1, filter_indices);
 
@@ -641,7 +732,7 @@ int inference_retinaface_model(rknn_app_context_t *app_ctx, object_detect_result
     uint8_t num_face_count = 0; 
     for (int i = 0; i < validCount; ++i) {
         if (num_face_count >= 4) {
-            printf("Warning: detected more than 128 faces, can not handle that");
+            printf("Warning: face result limit reached, only keep 4 faces\n");
             break;
         }
         if (filter_indices[i] == -1 || props[i] < 0.5) {
@@ -679,7 +770,10 @@ int inference_retinaface_model(rknn_app_context_t *app_ctx, object_detect_result
 
     //printf("num_face_count = %d\n",num_face_count);
 
-out:
+    free(filter_indices);
+    free(props);
+    free(loc_fp32);
+    free(landms_fp32);
     return ret;
 }
 

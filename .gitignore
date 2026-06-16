@@ -26,6 +26,10 @@ app/luckfox_pico_rknn_example/**/*.onnx
 app/luckfox_pico_rknn_example/**/*.pt
 app/luckfox_pico_rknn_example/**/*.pth
 
+# RKNN project 本地构建和部署输出
+app/rknn/build_*/
+app/rknn/install/
+
 # 临时下载的模型训练/导出源码仓库
 app/retinaface-pytorch/
 app/yolov5/
