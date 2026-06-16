@@ -1,0 +1,33 @@
+---
+description: 修 bug、debug、构建失败修复或运行异常排查时，记录问题等级、根因、解决方案和验证方式。
+globs:
+alwaysApply: true
+---
+
+# Bug 修复即时记录
+
+当任务属于修 bug、debug、构建失败修复、运行异常排查时，必须使用 `bugfix-record` 工作流。
+
+参考工作流文件：
+- `.agents/skills/bugfix-record/SKILL.md`
+
+执行要求：
+- 排查前检查 `memory/bugfix_records.md` 是否存在相关历史记录。
+- 区分事实、推测和已验证结论。
+- 未确认根因时不要写成结论，可以标记为 `investigating`。
+- 根因确认后，追加记录到 `memory/bugfix_records.md`。
+- 记录必须包含：日期、等级、状态、模块、现象、根因、解决方案、验证方式、相关文件、规避规则、标签。
+- 最终回复中说明是否已记录，以及记录的等级、状态和标题。
+
+等级：
+- `S0/blocking`：阻断编译、启动、升级、通信、数据安全或核心功能。
+- `S1/high`：核心功能异常、偶发严重问题、难定位问题。
+- `S2/medium`：局部功能异常、边界条件、兼容性问题。
+- `S3/low`：日志、可维护性、体验类问题。
+
+状态：
+- `fixed`：已修复并验证。
+- `mitigated`：已规避，后续仍需彻底处理。
+- `investigating`：仍在调查，根因未最终确认。
+- `follow-up`：当前不修，后续跟进。
+- `accepted`：已确认风险可接受。
