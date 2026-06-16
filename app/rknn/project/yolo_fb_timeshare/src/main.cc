@@ -200,6 +200,180 @@ static int get_timeshare_loop_limit()
     return loop_limit;
 }
 
+// 读取每轮摄像头连续采集时长，默认采集 1 秒。
+static int get_timeshare_capture_ms()
+{
+    const char *seconds_text;
+    int capture_seconds;
+
+    seconds_text = getenv("YOLO_CAPTURE_SECONDS");
+    if (seconds_text == NULL || seconds_text[0] == '\0')
+    {
+        return 1000;
+    }
+
+    capture_seconds = atoi(seconds_text);
+    if (capture_seconds <= 0)
+    {
+        capture_seconds = 1;
+    }
+
+    return capture_seconds * 1000;
+}
+
+// 将本轮耗时向上补齐到整数秒，用于降低连续启停和推理的瞬时压力。
+static long long get_integer_second_slot_ms(long long elapsed_ms)
+{
+    long long slot_ms;
+
+    if (elapsed_ms <= 0)
+    {
+        return 1000;
+    }
+
+    slot_ms = ((elapsed_ms + 999) / 1000) * 1000;
+    if (slot_ms <= 0)
+    {
+        slot_ms = 1000;
+    }
+
+    return slot_ms;
+}
+
+// 判断是否进入纯摄像头启停测试模式，该模式不初始化 RKNN。
+static int is_camera_cycle_test_enabled()
+{
+    const char *test_text;
+
+    test_text = getenv("YOLO_CAMERA_CYCLE_TEST");
+    if (test_text != NULL && strcmp(test_text, "1") == 0)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+// 读取摄像头启停测试频率，默认 1Hz。
+static int get_camera_cycle_interval_ms()
+{
+    const char *hz_text;
+    int cycle_hz;
+    int interval_ms;
+
+    hz_text = getenv("YOLO_CAMERA_CYCLE_HZ");
+    if (hz_text == NULL || hz_text[0] == '\0')
+    {
+        cycle_hz = 1;
+    }
+    else
+    {
+        cycle_hz = atoi(hz_text);
+        if (cycle_hz <= 0)
+        {
+            cycle_hz = 1;
+        }
+    }
+
+    interval_ms = 1000 / cycle_hz;
+    if (interval_ms <= 0)
+    {
+        interval_ms = 1;
+    }
+
+    return interval_ms;
+}
+
+// 读取摄像头启停测试次数，默认 10 次。
+static int get_camera_cycle_loop_count()
+{
+    const char *loops_text;
+    int loop_count;
+
+    loops_text = getenv("YOLO_CAMERA_CYCLE_LOOPS");
+    if (loops_text == NULL || loops_text[0] == '\0')
+    {
+        return 10;
+    }
+
+    loop_count = atoi(loops_text);
+    if (loop_count <= 0)
+    {
+        loop_count = 10;
+    }
+
+    return loop_count;
+}
+
+// 纯摄像头 1Hz 启停测试，用于隔离 rk_aiq/ISP 反复启停是否会导致系统异常。
+static int run_camera_cycle_test()
+{
+    int loop_count;
+    int interval_ms;
+    int success_count;
+
+    loop_count = get_camera_cycle_loop_count();
+    interval_ms = get_camera_cycle_interval_ms();
+    success_count = 0;
+
+    printf("camera cycle test start, loops=%d, interval_ms=%d\n", loop_count, interval_ms);
+    for (int i = 1; i <= loop_count && g_running; i++)
+    {
+        cv::VideoCapture cap;
+        cv::Mat frame;
+        long long loop_start_ms;
+        long long open_end_ms;
+        long long capture_end_ms;
+        long long release_end_ms;
+        long long elapsed_ms;
+        int ret;
+
+        ret = -1;
+        loop_start_ms = get_monotonic_ms();
+        cap.set(cv::CAP_PROP_FRAME_WIDTH, DEFAULT_BENCH_CAMERA_WIDTH);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, DEFAULT_BENCH_CAMERA_HEIGHT);
+        cap.open(0);
+        open_end_ms = get_monotonic_ms();
+        if (cap.isOpened())
+        {
+            for (int try_count = 0; try_count < 10; try_count++)
+            {
+                cap >> frame;
+                if (!frame.empty())
+                {
+                    ret = 0;
+                    success_count++;
+                    break;
+                }
+
+                usleep(10 * 1000);
+            }
+        }
+
+        capture_end_ms = get_monotonic_ms();
+        cap.release();
+        release_end_ms = get_monotonic_ms();
+
+        printf("camera_cycle=%d open_ms=%lld capture_ms=%lld release_ms=%lld total_ms=%lld ret=%d frame_empty=%d\n",
+               i,
+               open_end_ms - loop_start_ms,
+               capture_end_ms - open_end_ms,
+               release_end_ms - capture_end_ms,
+               release_end_ms - loop_start_ms,
+               ret,
+               frame.empty() ? 1 : 0);
+
+        elapsed_ms = release_end_ms - loop_start_ms;
+        if (elapsed_ms < interval_ms)
+        {
+            usleep((interval_ms - elapsed_ms) * 1000);
+        }
+    }
+
+    printf("camera cycle test finish, success=%d/%d\n", success_count, loop_count);
+    return 0;
+}
+
 // 离线逐帧推理测试：先采集视频帧，再释放摄像头，最后逐帧记录 RKNN 推理耗时。
 static int run_video_inference_benchmark(const char *model_path, int frame_count)
 {
@@ -964,11 +1138,18 @@ int main(int argc, char **argv)
     signal(SIGTERM, signal_handler);
     system("RkLunch-stop.sh");
     const char *model_path = argv[1];
+
+    if (is_camera_cycle_test_enabled())
+    {
+        return run_camera_cycle_test();
+    }
+
     char text[128];
     int save_index = 0;
     int save_enable = 0;
     int loop_index = 0;
     int loop_limit = 0;
+    int capture_duration_ms = 0;
     std::set<int> saved_class_ids;
 
     int model_width = 640;
@@ -1007,25 +1188,34 @@ int main(int argc, char **argv)
                               CV_8UC3,
                               rknn_app_ctx.input_mems[0]->virt_addr);
     loop_limit = get_timeshare_loop_limit();
-    printf("yolo_fb_timeshare start, camera and NPU run in separate time slots, loop_limit=%d\n",
-           loop_limit);
+    capture_duration_ms = get_timeshare_capture_ms();
+    printf("yolo_fb_timeshare start, camera and NPU run in separate time slots, loop_limit=%d, capture_ms=%d\n",
+           loop_limit,
+           capture_duration_ms);
 
     while (g_running)
     {
-        std::vector<int> new_class_ids;
-        object_detect_result_list od_results;
+        std::vector<cv::Mat> frames;
         cv::VideoCapture cap;
-        cv::Mat bgr;
         long long loop_start_ms;
         long long capture_start_ms;
         long long capture_end_ms;
-        long long resize_end_ms;
-        long long inference_end_ms;
-        int capture_try;
+        long long loop_end_ms;
+        long long loop_elapsed_ms;
+        long long loop_slot_ms;
+        long long loop_sleep_ms;
+        long long resize_sum_ms;
+        long long inference_sum_ms;
+        int inference_success_count;
+        int total_detect_count;
 
         loop_index++;
-        memset(&od_results, 0, sizeof(object_detect_result_list));
         memset(text, 0, sizeof(text));
+        frames.reserve(32);
+        resize_sum_ms = 0;
+        inference_sum_ms = 0;
+        inference_success_count = 0;
+        total_detect_count = 0;
 
         loop_start_ms = get_monotonic_ms();
         capture_start_ms = loop_start_ms;
@@ -1040,21 +1230,32 @@ int main(int argc, char **argv)
             continue;
         }
 
-        // 只取一帧用于本轮推理，随后立即释放摄像头，避免 ISP 和 NPU 同时运行。
-        for (capture_try = 0; capture_try < 10; capture_try++)
+        // 本轮只采集指定时长，随后释放摄像头，再批量执行 NPU 推理。
+        while (g_running)
         {
-            cap >> bgr;
-            if (!bgr.empty())
+            cv::Mat frame;
+            long long now_ms;
+
+            now_ms = get_monotonic_ms();
+            if ((now_ms - capture_start_ms) >= capture_duration_ms && !frames.empty())
             {
                 break;
             }
 
-            usleep(10 * 1000);
+            cap >> frame;
+            if (!frame.empty())
+            {
+                frames.push_back(frame.clone());
+            }
+            else
+            {
+                usleep(10 * 1000);
+            }
         }
 
         cap.release();
         capture_end_ms = get_monotonic_ms();
-        if (bgr.empty())
+        if (frames.empty())
         {
             printf("loop=%d camera frame empty, capture_ms=%lld\n",
                    loop_index,
@@ -1062,77 +1263,128 @@ int main(int argc, char **argv)
             continue;
         }
 
-        cv::resize(bgr,
-                   bgr_model_input,
-                   cv::Size(model_width, model_height),
-                   0,
-                   0,
-                   cv::INTER_LINEAR);
-        resize_end_ms = get_monotonic_ms();
-        ret = inference_yolov5_model(&rknn_app_ctx, &od_results);
-        inference_end_ms = get_monotonic_ms();
-
-        if (ret == 0)
+        for (size_t frame_index = 0; frame_index < frames.size(); frame_index++)
         {
-            for (int i = 0; i < od_results.count; i++)
+            std::vector<int> new_class_ids;
+            object_detect_result_list od_results;
+            cv::Mat bgr;
+            long long frame_start_ms;
+            long long resize_end_ms;
+            long long inference_end_ms;
+
+            bgr = frames[frame_index];
+            memset(&od_results, 0, sizeof(object_detect_result_list));
+            frame_start_ms = get_monotonic_ms();
+            cv::resize(bgr,
+                       bgr_model_input,
+                       cv::Size(model_width, model_height),
+                       0,
+                       0,
+                       cv::INTER_LINEAR);
+            resize_end_ms = get_monotonic_ms();
+            ret = inference_yolov5_model(&rknn_app_ctx, &od_results);
+            inference_end_ms = get_monotonic_ms();
+            resize_sum_ms += resize_end_ms - frame_start_ms;
+            inference_sum_ms += inference_end_ms - resize_end_ms;
+
+            if (ret == 0)
             {
-                object_detect_result *det_result;
+                inference_success_count++;
+                total_detect_count += od_results.count;
 
-                det_result = &(od_results.results[i]);
-                mapCoordinates(bgr, bgr_model_input, &det_result->box.left, &det_result->box.top);
-                mapCoordinates(bgr, bgr_model_input, &det_result->box.right, &det_result->box.bottom);
-                clamp_detect_box(det_result, bgr.cols, bgr.rows);
-
-                printf("%s @ (%d %d %d %d) %.3f\n",
-                       coco_cls_to_name(det_result->cls_id),
-                       det_result->box.left,
-                       det_result->box.top,
-                       det_result->box.right,
-                       det_result->box.bottom,
-                       det_result->prop);
-
-                cv::rectangle(bgr,
-                              cv::Point(det_result->box.left, det_result->box.top),
-                              cv::Point(det_result->box.right, det_result->box.bottom),
-                              cv::Scalar(0, 255, 0),
-                              3);
-
-                sprintf(text, "%s %.1f%%", coco_cls_to_name(det_result->cls_id), det_result->prop * 100);
-                cv::putText(bgr,
-                            text,
-                            cv::Point(det_result->box.left, det_result->box.top - 8),
-                            cv::FONT_HERSHEY_SIMPLEX,
-                            0.5,
-                            cv::Scalar(0, 255, 0),
-                            2);
-
-                if (saved_class_ids.find(det_result->cls_id) == saved_class_ids.end())
+                for (int i = 0; i < od_results.count; i++)
                 {
-                    saved_class_ids.insert(det_result->cls_id);
-                    new_class_ids.push_back(det_result->cls_id);
+                    object_detect_result *det_result;
+
+                    det_result = &(od_results.results[i]);
+                    mapCoordinates(bgr, bgr_model_input, &det_result->box.left, &det_result->box.top);
+                    mapCoordinates(bgr, bgr_model_input, &det_result->box.right, &det_result->box.bottom);
+                    clamp_detect_box(det_result, bgr.cols, bgr.rows);
+
+                    printf("%s @ (%d %d %d %d) %.3f\n",
+                           coco_cls_to_name(det_result->cls_id),
+                           det_result->box.left,
+                           det_result->box.top,
+                           det_result->box.right,
+                           det_result->box.bottom,
+                           det_result->prop);
+
+                    cv::rectangle(bgr,
+                                  cv::Point(det_result->box.left, det_result->box.top),
+                                  cv::Point(det_result->box.right, det_result->box.bottom),
+                                  cv::Scalar(0, 255, 0),
+                                  3);
+
+                    sprintf(text, "%s %.1f%%", coco_cls_to_name(det_result->cls_id), det_result->prop * 100);
+                    cv::putText(bgr,
+                                text,
+                                cv::Point(det_result->box.left, det_result->box.top - 8),
+                                cv::FONT_HERSHEY_SIMPLEX,
+                                0.5,
+                                cv::Scalar(0, 255, 0),
+                                2);
+
+                    if (saved_class_ids.find(det_result->cls_id) == saved_class_ids.end())
+                    {
+                        saved_class_ids.insert(det_result->cls_id);
+                        new_class_ids.push_back(det_result->cls_id);
+                    }
+                }
+
+                if (save_enable)
+                {
+                    for (size_t i = 0; i < new_class_ids.size(); i++)
+                    {
+                        save_index++;
+                        save_detect_image(SAVE_RESULT_DIR, save_index, new_class_ids[i], bgr);
+                    }
                 }
             }
 
-            if (save_enable)
-            {
-                for (size_t i = 0; i < new_class_ids.size(); i++)
-                {
-                    save_index++;
-                    save_detect_image(SAVE_RESULT_DIR, save_index, new_class_ids[i], bgr);
-                }
-            }
+            printf("loop=%d frame=%zu resize_ms=%lld inference_ms=%lld total_ms=%lld ret=%d detect_count=%d\n",
+                   loop_index,
+                   frame_index + 1,
+                   resize_end_ms - frame_start_ms,
+                   inference_end_ms - resize_end_ms,
+                   inference_end_ms - frame_start_ms,
+                   ret,
+                   od_results.count);
+
+            display_mat_to_framebuffer(&fb_info, bgr);
         }
 
-        printf("loop=%d capture_ms=%lld resize_ms=%lld inference_ms=%lld total_ms=%lld ret=%d detect_count=%d\n",
-               loop_index,
-               capture_end_ms - capture_start_ms,
-               resize_end_ms - capture_end_ms,
-               inference_end_ms - resize_end_ms,
-               inference_end_ms - loop_start_ms,
-               ret,
-               od_results.count);
+        loop_end_ms = get_monotonic_ms();
+        loop_elapsed_ms = loop_end_ms - loop_start_ms;
+        loop_slot_ms = get_integer_second_slot_ms(loop_elapsed_ms);
+        loop_sleep_ms = loop_slot_ms - loop_elapsed_ms;
+        if (loop_sleep_ms < 0)
+        {
+            loop_sleep_ms = 0;
+        }
 
-        display_mat_to_framebuffer(&fb_info, bgr);
+        if (loop_limit > 0 && loop_index >= loop_limit)
+        {
+            loop_sleep_ms = 0;
+            loop_slot_ms = loop_elapsed_ms;
+        }
+
+        printf("loop=%d captured_frames=%zu capture_ms=%lld infer_frames=%zu inference_success=%d resize_avg_ms=%.3f inference_avg_ms=%.3f total_ms=%lld slot_ms=%lld sleep_ms=%lld detect_count=%d\n",
+               loop_index,
+               frames.size(),
+               capture_end_ms - capture_start_ms,
+               frames.size(),
+               inference_success_count,
+               frames.empty() ? 0.0 : (double)resize_sum_ms / frames.size(),
+               frames.empty() ? 0.0 : (double)inference_sum_ms / frames.size(),
+               loop_elapsed_ms,
+               loop_slot_ms,
+               loop_sleep_ms,
+               total_detect_count);
+
+        if (loop_sleep_ms > 0)
+        {
+            usleep(loop_sleep_ms * 1000);
+        }
 
         if (loop_limit > 0 && loop_index >= loop_limit)
         {

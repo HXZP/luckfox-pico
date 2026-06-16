@@ -34,7 +34,8 @@ select opt in "${libc_options[@]}"; do
 	fi
 done
 
-options=("yolo_camera_detect"
+options=("face_fb_detect"
+	"yolo_camera_detect"
 	"yolo_fb_detect"
 	"yolo_fb_timeshare")
 
