@@ -1,4 +1,0 @@
-/home/hxzp/luckfox-pico/app/rknn/install/uclibc/face_fb_detect/face_fb_detect
-/home/hxzp/luckfox-pico/app/rknn/install/uclibc/face_fb_detect/run.sh
-/home/hxzp/luckfox-pico/app/rknn/install/uclibc/face_fb_detect/model/retinaface.rknn
-/home/hxzp/luckfox-pico/app/rknn/install/uclibc/face_fb_detect/lib/librga.so
