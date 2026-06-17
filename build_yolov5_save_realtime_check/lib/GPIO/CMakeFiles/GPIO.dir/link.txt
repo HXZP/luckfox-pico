@@ -1,2 +1,0 @@
-/home/hxzp/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-ar qc libGPIO.a CMakeFiles/GPIO.dir/sysfs_gpio.cc.o
-/home/hxzp/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-ranlib libGPIO.a
