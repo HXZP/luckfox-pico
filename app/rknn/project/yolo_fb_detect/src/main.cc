@@ -64,7 +64,8 @@
 #define DISPLAY_IDLE_US 1000
 #define DEFAULT_BENCH_CAMERA_WIDTH 240
 #define DEFAULT_BENCH_CAMERA_HEIGHT 135
-#define DEFAULT_INFERENCE_FPS 12
+#define DEFAULT_REALTIME_INTERVAL_MS 1000
+#define DEFAULT_DISPLAY_INTERVAL_MS 30
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -97,7 +98,7 @@ struct FramebufferInfo
     int height;
 };
 
-// 推理线程所需的模型上下文和输入尺寸。
+// 并行模式下，后台推理线程只读取最新帧，主线程持续刷新 framebuffer。
 struct InferenceThreadArgs
 {
     rknn_app_context_t *app_ctx;
@@ -106,7 +107,14 @@ struct InferenceThreadArgs
     int inference_interval_ms;
 };
 
-// 处理退出信号，让主循环和推理线程可以一起退出。
+struct RuntimeOptions
+{
+    int parallel_output;
+    int inference_interval_ms;
+    int display_interval_ms;
+};
+
+// 处理退出信号，让主循环可以正常释放摄像头、NPU 和 framebuffer。
 static void signal_handler(int sig)
 {
     (void)sig;
@@ -125,6 +133,92 @@ static int is_inference_enabled()
     }
 
     return 1;
+}
+
+static void print_usage(const char *program_name)
+{
+    printf("usage:\n");
+    printf("  %s <yolov5 model_path> serial <inference_interval_ms>\n", program_name);
+    printf("  %s <yolov5 model_path> parallel <inference_interval_ms> <display_interval_ms>\n", program_name);
+    printf("examples:\n");
+    printf("  %s ./model/yolov5.rknn serial 1000\n", program_name);
+    printf("  %s ./model/yolov5.rknn parallel 1000 30\n", program_name);
+}
+
+static int parse_positive_int(const char *text, const char *name, int *value)
+{
+    char *end_ptr;
+    long parsed;
+
+    if (text == NULL || text[0] == '\0')
+    {
+        printf("%s is required\n", name);
+        return -1;
+    }
+
+    errno = 0;
+    end_ptr = NULL;
+    parsed = strtol(text, &end_ptr, 10);
+    if (errno != 0 || end_ptr == text || *end_ptr != '\0' || parsed <= 0 || parsed > 600000)
+    {
+        printf("%s must be a positive integer in milliseconds: %s\n", name, text);
+        return -1;
+    }
+
+    *value = (int)parsed;
+    return 0;
+}
+
+// 解析命令行输出模式：serial 为采一帧推一帧显示一帧，parallel 为后台推理、前台持续显示。
+static int parse_runtime_options(int argc, char **argv, RuntimeOptions *options)
+{
+    const char *mode_text;
+
+    if (argc < 4)
+    {
+        print_usage(argv[0]);
+        return -1;
+    }
+
+    memset(options, 0, sizeof(RuntimeOptions));
+    mode_text = argv[2];
+    if (strcmp(mode_text, "serial") == 0 || strcmp(mode_text, "sync") == 0)
+    {
+        if (argc != 4)
+        {
+            print_usage(argv[0]);
+            return -1;
+        }
+        options->parallel_output = 0;
+        if (parse_positive_int(argv[3], "inference_interval_ms", &options->inference_interval_ms) != 0)
+        {
+            print_usage(argv[0]);
+            return -1;
+        }
+        options->display_interval_ms = options->inference_interval_ms;
+        return 0;
+    }
+
+    if (strcmp(mode_text, "parallel") == 0 || strcmp(mode_text, "async") == 0)
+    {
+        if (argc != 5)
+        {
+            print_usage(argv[0]);
+            return -1;
+        }
+        options->parallel_output = 1;
+        if (parse_positive_int(argv[3], "inference_interval_ms", &options->inference_interval_ms) != 0 ||
+            parse_positive_int(argv[4], "display_interval_ms", &options->display_interval_ms) != 0)
+        {
+            print_usage(argv[0]);
+            return -1;
+        }
+        return 0;
+    }
+
+    printf("unknown mode: %s\n", mode_text);
+    print_usage(argv[0]);
+    return -1;
 }
 
 // 读取离线推理测试帧数，返回 0 表示不进入 benchmark 模式。
@@ -146,37 +240,6 @@ static int get_benchmark_frame_count()
     }
 
     return frame_count;
-}
-
-// 读取实时推理目标帧率，并转换为两次推理之间的最小间隔。
-static int get_inference_interval_ms()
-{
-    const char *fps_text;
-    int inference_fps;
-    int interval_ms;
-
-    fps_text = getenv("YOLO_INFERENCE_FPS");
-    if (fps_text == NULL || fps_text[0] == '\0')
-    {
-        inference_fps = DEFAULT_INFERENCE_FPS;
-    }
-    else
-    {
-        inference_fps = atoi(fps_text);
-        if (inference_fps <= 0)
-        {
-            inference_fps = DEFAULT_INFERENCE_FPS;
-        }
-    }
-
-    interval_ms = 1000 / inference_fps;
-    if (interval_ms <= 0)
-    {
-        interval_ms = 1;
-    }
-
-    printf("YOLO inference target fps=%d, interval=%dms\n", inference_fps, interval_ms);
-    return interval_ms;
 }
 
 // 离线逐帧推理测试：先采集视频帧，再释放摄像头，最后逐帧记录 RKNN 推理耗时。
@@ -336,7 +399,7 @@ static void clamp_detect_box(object_detect_result *det_result, int image_width, 
     det_result->box.bottom = std::max(0, std::min(det_result->box.bottom, image_height - 1));
 }
 
-// 更新最新摄像头帧，推理线程只读取最新一帧，避免排队堆积。
+// 更新最新摄像头帧，推理线程读取时只处理最新的一帧，避免队列堆积。
 static void update_latest_frame(const cv::Mat &frame, unsigned int frame_id)
 {
     pthread_mutex_lock(&g_frame_mutex);
@@ -363,7 +426,7 @@ static int copy_latest_frame(cv::Mat *frame, unsigned int *frame_id, unsigned in
     return ret;
 }
 
-// 更新最近一次有效检测结果，显示线程会在短时间内复用该结果。
+// 更新最近一次有效检测结果。结果保持模型坐标，显示前再映射到当前帧坐标。
 static void update_latest_results(const object_detect_result_list *results, unsigned int frame_id)
 {
     pthread_mutex_lock(&g_result_mutex);
@@ -373,7 +436,7 @@ static void update_latest_results(const object_detect_result_list *results, unsi
     pthread_mutex_unlock(&g_result_mutex);
 }
 
-// 获取仍在有效期内的检测结果，超时后返回空结果避免旧框长时间残留。
+// 获取仍在有效期内的检测结果，超时后返回空结果，避免旧框长时间残留。
 static void get_display_results(object_detect_result_list *results)
 {
     long long now_ms;
@@ -548,8 +611,8 @@ void mapCoordinates(cv::Mat input, cv::Mat output, int *x, int *y)
     *y = (int)((float)*y / scaleY);
 }
 
-// 后台推理线程，只处理最新帧，避免 NPU 慢或超时时阻塞 framebuffer 刷新。
-static void *inference_thread(void *arg)
+// 并行模式后台推理线程：拿最新帧推理，主线程不等待 NPU。
+static void *parallel_inference_thread(void *arg)
 {
     InferenceThreadArgs *thread_args;
     cv::Mat infer_frame;
@@ -557,7 +620,6 @@ static void *inference_thread(void *arg)
     unsigned int last_frame_id;
     unsigned int current_frame_id;
     unsigned int inference_count;
-    int inference_interval_ms;
 
     thread_args = (InferenceThreadArgs *)arg;
     bgr_model_input = cv::Mat(thread_args->model_height,
@@ -567,12 +629,12 @@ static void *inference_thread(void *arg)
     last_frame_id = 0;
     current_frame_id = 0;
     inference_count = 0;
-    inference_interval_ms = thread_args->inference_interval_ms;
 
     while (g_running)
     {
         object_detect_result_list od_results;
         long long inference_start_ms;
+        long long resize_end_ms;
         long long inference_end_ms;
         long long elapsed_ms;
         int ret;
@@ -586,6 +648,7 @@ static void *inference_thread(void *arg)
         last_frame_id = current_frame_id;
         inference_count++;
         memset(&od_results, 0, sizeof(object_detect_result_list));
+        od_results.id = current_frame_id;
         inference_start_ms = get_monotonic_ms();
 
         cv::resize(infer_frame,
@@ -594,57 +657,32 @@ static void *inference_thread(void *arg)
                    0,
                    0,
                    cv::INTER_LINEAR);
+        resize_end_ms = get_monotonic_ms();
         ret = inference_yolov5_model(thread_args->app_ctx, &od_results);
         inference_end_ms = get_monotonic_ms();
         elapsed_ms = inference_end_ms - inference_start_ms;
 
-        if (elapsed_ms < inference_interval_ms)
+        if (ret == 0)
         {
-            usleep((inference_interval_ms - elapsed_ms) * 1000);
+            update_latest_results(&od_results, current_frame_id);
         }
 
-        if (ret != 0)
+        if (ret != 0 || (inference_count % YOLO_STATUS_LOG_INTERVAL) == 0)
         {
-            if ((inference_count % YOLO_STATUS_LOG_INTERVAL) == 0)
-            {
-                printf("inference thread failed, frame=%u, ret=%d, cost_ms=%lld\n",
-                       current_frame_id,
-                       ret,
-                       elapsed_ms);
-            }
-            continue;
-        }
-
-        for (int i = 0; i < od_results.count; i++)
-        {
-            object_detect_result *det_result;
-
-            det_result = &(od_results.results[i]);
-            mapCoordinates(infer_frame, bgr_model_input, &det_result->box.left, &det_result->box.top);
-            mapCoordinates(infer_frame, bgr_model_input, &det_result->box.right, &det_result->box.bottom);
-            clamp_detect_box(det_result, infer_frame.cols, infer_frame.rows);
-        }
-
-        if (od_results.count == 0)
-        {
-            if ((inference_count % YOLO_STATUS_LOG_INTERVAL) == 0)
-            {
-                printf("inference thread detect count=0, frame=%u, cost_ms=%lld\n",
-                       current_frame_id,
-                       elapsed_ms);
-            }
-            continue;
-        }
-
-        if ((inference_count % YOLO_STATUS_LOG_INTERVAL) == 0)
-        {
-            printf("inference thread ok, frame=%u, cost_ms=%lld, detect_count=%d\n",
+            printf("parallel inference frame=%u resize_ms=%lld inference_ms=%lld total_ms=%lld sleep_target_ms=%d ret=%d detect_count=%d\n",
                    current_frame_id,
+                   resize_end_ms - inference_start_ms,
+                   inference_end_ms - resize_end_ms,
                    elapsed_ms,
+                   thread_args->inference_interval_ms,
+                   ret,
                    od_results.count);
         }
 
-        update_latest_results(&od_results, current_frame_id);
+        if (elapsed_ms < thread_args->inference_interval_ms)
+        {
+            usleep((thread_args->inference_interval_ms - elapsed_ms) * 1000);
+        }
     }
 
     return NULL;
@@ -933,11 +971,12 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
-    if (argc != 2)
+    RuntimeOptions runtime_options;
+    if (parse_runtime_options(argc, argv, &runtime_options) != 0)
     {
-        printf("%s <yolov5 model_path>\n", argv[0]);
         return -1;
     }
+
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -951,17 +990,18 @@ int main(int argc, char **argv)
         return run_video_inference_benchmark(model_path, bench_frame_count);
     }
 
-    clock_t start_time;
-    clock_t end_time;
     char text[128];
     float fps = 0;
     int save_index = 0;
     int save_enable = 0;
-    int inference_thread_started = 0;
     int inference_enable = 0;
     int model_initialized = 0;
     int post_process_initialized = 0;
+    int parallel_output = 0;
+    int inference_thread_started = 0;
     unsigned int frame_index = 0;
+    int realtime_interval_ms;
+    int display_interval_ms;
     std::set<int> saved_class_ids;
     pthread_t inference_thread_id;
     InferenceThreadArgs inference_args;
@@ -975,6 +1015,10 @@ int main(int argc, char **argv)
     memset(&rknn_app_ctx, 0, sizeof(rknn_app_context_t));
 
     inference_enable = is_inference_enabled();
+    parallel_output = runtime_options.parallel_output;
+    realtime_interval_ms = runtime_options.inference_interval_ms;
+    display_interval_ms = runtime_options.display_interval_ms;
+    printf("YOLO fb mode=%s\n", parallel_output ? "parallel" : "serial");
     if (inference_enable)
     {
         ret = init_yolov5_model(model_path, &rknn_app_ctx);
@@ -1017,6 +1061,7 @@ int main(int argc, char **argv)
     //Init Opencv-mobile 
     cv::VideoCapture cap;
     cv::Mat bgr(fb_info.height, fb_info.width, CV_8UC3); 
+    cv::Mat bgr_model_input;
     cap.set(cv::CAP_PROP_FRAME_WIDTH,  fb_info.width);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, fb_info.height);
     cap.open(0);
@@ -1036,16 +1081,21 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    if (inference_enable)
+    bgr_model_input = cv::Mat(model_height,
+                              model_width,
+                              CV_8UC3,
+                              model_initialized ? rknn_app_ctx.input_mems[0]->virt_addr : NULL);
+    if (inference_enable && parallel_output)
     {
         inference_args.app_ctx = &rknn_app_ctx;
         inference_args.model_width = model_width;
         inference_args.model_height = model_height;
-        inference_args.inference_interval_ms = get_inference_interval_ms();
-        ret = pthread_create(&inference_thread_id, NULL, inference_thread, &inference_args);
+        inference_args.inference_interval_ms = realtime_interval_ms;
+        ret = pthread_create(&inference_thread_id, NULL, parallel_inference_thread, &inference_args);
         if (ret != 0)
         {
-            printf("start inference thread failed, ret=%d\n", ret);
+            printf("start parallel inference thread failed, ret=%d\n", ret);
+            cap.release();
             clear_framebuffer(&fb_info);
             close_framebuffer(&fb_info);
             if (post_process_initialized)
@@ -1061,13 +1111,30 @@ int main(int argc, char **argv)
         inference_thread_started = 1;
     }
 
+    printf("yolo_fb_detect start: mode=%s, %s, inference_interval_ms=%d, display_interval_ms=%d\n",
+           parallel_output ? "parallel" : "serial",
+           parallel_output ? "display every captured frame, infer latest frame in background" : "one frame, one inference, one display",
+           realtime_interval_ms,
+           parallel_output ? display_interval_ms : realtime_interval_ms);
+
     while (g_running)
     {
         std::vector<int> new_class_ids;
         object_detect_result_list display_results;
+        long long loop_start_ms;
+        long long capture_end_ms;
+        long long resize_end_ms;
+        long long inference_end_ms;
+        long long display_end_ms;
+        long long loop_process_ms;
+        long long sleep_ms;
+        long long overrun_ms;
 
-        start_time = clock();
+        memset(&display_results, 0, sizeof(object_detect_result_list));
+        ret = 0;
+        loop_start_ms = get_monotonic_ms();
         cap >> bgr;
+        capture_end_ms = get_monotonic_ms();
         frame_index++;
         if (bgr.empty())
         {
@@ -1076,17 +1143,60 @@ int main(int argc, char **argv)
             continue;
         }
 
-        if (inference_enable)
+        if (inference_enable && parallel_output)
         {
             update_latest_frame(bgr, frame_index);
             get_display_results(&display_results);
+            resize_end_ms = capture_end_ms;
+            inference_end_ms = resize_end_ms;
+        }
+        else if (inference_enable)
+        {
+            cv::resize(bgr,
+                       bgr_model_input,
+                       cv::Size(model_width, model_height),
+                       0,
+                       0,
+                       cv::INTER_LINEAR);
+            resize_end_ms = get_monotonic_ms();
+            ret = inference_yolov5_model(&rknn_app_ctx, &display_results);
+            inference_end_ms = get_monotonic_ms();
+            if (ret != 0)
+            {
+                printf("frame=%u inference failed, ret=%d\n", frame_index, ret);
+                memset(&display_results, 0, sizeof(object_detect_result_list));
+            }
+
+            for (int i = 0; i < display_results.count; i++)
+            {
+                object_detect_result *det_result;
+
+                det_result = &(display_results.results[i]);
+                mapCoordinates(bgr, bgr_model_input, &det_result->box.left, &det_result->box.top);
+                mapCoordinates(bgr, bgr_model_input, &det_result->box.right, &det_result->box.bottom);
+                clamp_detect_box(det_result, bgr.cols, bgr.rows);
+            }
         }
         else
         {
-            memset(&display_results, 0, sizeof(object_detect_result_list));
+            resize_end_ms = capture_end_ms;
+            inference_end_ms = resize_end_ms;
         }
 
-        // 绘制最近一次有效推理结果，推理线程慢时仍保持视频持续刷新。
+        if (parallel_output)
+        {
+            for (int i = 0; i < display_results.count; i++)
+            {
+                object_detect_result *det_result;
+
+                det_result = &(display_results.results[i]);
+                mapCoordinates(bgr, bgr_model_input, &det_result->box.left, &det_result->box.top);
+                mapCoordinates(bgr, bgr_model_input, &det_result->box.right, &det_result->box.bottom);
+                clamp_detect_box(det_result, bgr.cols, bgr.rows);
+            }
+        }
+
+        // serial 模式绘制本轮结果，parallel 模式绘制后台线程最近一次有效结果。
         for (int i = 0; i < display_results.count; i++)
         {
             object_detect_result *det_result = &(display_results.results[i]);
@@ -1130,17 +1240,39 @@ int main(int argc, char **argv)
         }
 
         display_mat_to_framebuffer(&fb_info, bgr);
-
-        //Update Fps
-        end_time = clock();
-        clock_t elapsed_time = end_time - start_time;
-        if (elapsed_time > 0)
+        display_end_ms = get_monotonic_ms();
+        loop_process_ms = display_end_ms - loop_start_ms;
+        if (loop_process_ms > 0)
         {
-            fps = (float)CLOCKS_PER_SEC / (float)elapsed_time;
+            fps = 1000.0f / (float)loop_process_ms;
         }
+        sleep_ms = 0;
+        overrun_ms = 0;
+        if (loop_process_ms < (parallel_output ? display_interval_ms : realtime_interval_ms))
+        {
+            sleep_ms = (parallel_output ? display_interval_ms : realtime_interval_ms) - loop_process_ms;
+            usleep(sleep_ms * 1000);
+        }
+        else
+        {
+            overrun_ms = loop_process_ms - (parallel_output ? display_interval_ms : realtime_interval_ms);
+        }
+
+        printf("frame=%u mode=%s capture_ms=%lld resize_ms=%lld inference_ms=%lld display_ms=%lld process_ms=%lld sleep_ms=%lld overrun_ms=%lld ret=%d detect_count=%d\n",
+               frame_index,
+               parallel_output ? "parallel" : "serial",
+               capture_end_ms - loop_start_ms,
+               resize_end_ms - capture_end_ms,
+               inference_end_ms - resize_end_ms,
+               display_end_ms - inference_end_ms,
+               loop_process_ms,
+               sleep_ms,
+               overrun_ms,
+               inference_enable ? ret : 0,
+               display_results.count);
+
         //printf("%s\n",text);
         memset(text,0,sizeof(text)); 
-        usleep(DISPLAY_IDLE_US);
     }
 
     g_running = 0;
