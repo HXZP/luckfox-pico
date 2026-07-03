@@ -66,6 +66,7 @@
 #define DEFAULT_BENCH_CAMERA_HEIGHT 135
 #define DEFAULT_REALTIME_INTERVAL_MS 1000
 #define DEFAULT_DISPLAY_INTERVAL_MS 30
+#define DEFAULT_CAMERA_ROTATION "none"
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -114,11 +115,98 @@ struct RuntimeOptions
     int display_interval_ms;
 };
 
+enum CameraRotation
+{
+    CAMERA_ROTATION_NONE = 0,
+    CAMERA_ROTATION_CW90,
+    CAMERA_ROTATION_CCW90,
+    CAMERA_ROTATION_180
+};
+
 // 处理退出信号，让主循环可以正常释放摄像头、NPU 和 framebuffer。
 static void signal_handler(int sig)
 {
     (void)sig;
     g_running = 0;
+}
+
+static CameraRotation get_camera_rotation()
+{
+    const char *rotation_text;
+
+    rotation_text = getenv("YOLO_CAMERA_ROTATION");
+    if (rotation_text == NULL || rotation_text[0] == '\0')
+    {
+        rotation_text = DEFAULT_CAMERA_ROTATION;
+    }
+
+    if (strcmp(rotation_text, "0") == 0 ||
+        strcmp(rotation_text, "none") == 0 ||
+        strcmp(rotation_text, "normal") == 0)
+    {
+        return CAMERA_ROTATION_NONE;
+    }
+
+    if (strcmp(rotation_text, "cw90") == 0 ||
+        strcmp(rotation_text, "clockwise90") == 0 ||
+        strcmp(rotation_text, "90") == 0)
+    {
+        return CAMERA_ROTATION_CW90;
+    }
+
+    if (strcmp(rotation_text, "ccw90") == 0 ||
+        strcmp(rotation_text, "counterclockwise90") == 0 ||
+        strcmp(rotation_text, "270") == 0)
+    {
+        return CAMERA_ROTATION_CCW90;
+    }
+
+    if (strcmp(rotation_text, "180") == 0)
+    {
+        return CAMERA_ROTATION_180;
+    }
+
+    printf("unknown YOLO_CAMERA_ROTATION=%s, fallback to %s\n",
+           rotation_text,
+           DEFAULT_CAMERA_ROTATION);
+    return CAMERA_ROTATION_NONE;
+}
+
+static const char *camera_rotation_to_text(CameraRotation rotation)
+{
+    switch (rotation)
+    {
+    case CAMERA_ROTATION_NONE:
+        return "none";
+    case CAMERA_ROTATION_CW90:
+        return "cw90";
+    case CAMERA_ROTATION_CCW90:
+        return "ccw90";
+    case CAMERA_ROTATION_180:
+        return "180";
+    default:
+        return "unknown";
+    }
+}
+
+static void apply_camera_rotation(const cv::Mat &input, cv::Mat *output, CameraRotation rotation)
+{
+    switch (rotation)
+    {
+    case CAMERA_ROTATION_CW90:
+        cv::rotate(input, *output, cv::ROTATE_90_CLOCKWISE);
+        break;
+    case CAMERA_ROTATION_CCW90:
+        cv::rotate(input, *output, cv::ROTATE_90_COUNTERCLOCKWISE);
+        break;
+    case CAMERA_ROTATION_180:
+        cv::rotate(input, *output, cv::ROTATE_180);
+        break;
+    case CAMERA_ROTATION_NONE:
+    default:
+        input.copyTo(*output);
+        break;
+    }
 }
 
 // 读取环境变量，决定是否跳过 RKNN 推理，仅保留摄像头和 framebuffer 显示。
@@ -545,18 +633,40 @@ static void close_framebuffer(FramebufferInfo *fb)
 // 参考 simple_camera_fb 的方案，将 OpenCV BGR 图像转换为 RGB565 后写入 fb0。
 static int display_mat_to_framebuffer(const FramebufferInfo *fb, const cv::Mat &image)
 {
+    cv::Mat display_image;
     cv::Mat rgb_image;
+    int offset_x;
+    int offset_y;
     int width;
     int height;
+    double scale_x;
+    double scale_y;
+    double scale;
 
     if (image.empty() || fb->data == NULL || fb->bytes_per_pixel != 2)
     {
         return -1;
     }
 
-    cv::cvtColor(image, rgb_image, cv::COLOR_BGR2RGB);
-    width = std::min(image.cols, fb->width);
-    height = std::min(image.rows, fb->height);
+    scale_x = (double)fb->width / (double)image.cols;
+    scale_y = (double)fb->height / (double)image.rows;
+    scale = std::min(scale_x, scale_y);
+    width = std::max(1, (int)((double)image.cols * scale));
+    height = std::max(1, (int)((double)image.rows * scale));
+    offset_x = (fb->width - width) / 2;
+    offset_y = (fb->height - height) / 2;
+
+    if (width != image.cols || height != image.rows)
+    {
+        cv::resize(image, display_image, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
+    }
+    else
+    {
+        display_image = image;
+    }
+
+    memset(fb->data, 0, fb->screensize);
+    cv::cvtColor(display_image, rgb_image, cv::COLOR_BGR2RGB);
 
     for (int y = 0; y < height; y++)
     {
@@ -565,7 +675,7 @@ static int display_mat_to_framebuffer(const FramebufferInfo *fb, const cv::Mat &
         int x;
 
         src = rgb_image.ptr<uint8_t>(y);
-        dst = reinterpret_cast<uint16_t *>(fb->data + y * fb->line_length);
+        dst = reinterpret_cast<uint16_t *>(fb->data + (y + offset_y) * fb->line_length) + offset_x;
         x = 0;
 
         for (; x + 3 < width; x += 4)
@@ -1002,6 +1112,7 @@ int main(int argc, char **argv)
     unsigned int frame_index = 0;
     int realtime_interval_ms;
     int display_interval_ms;
+    CameraRotation camera_rotation;
     std::set<int> saved_class_ids;
     pthread_t inference_thread_id;
     InferenceThreadArgs inference_args;
@@ -1018,7 +1129,10 @@ int main(int argc, char **argv)
     parallel_output = runtime_options.parallel_output;
     realtime_interval_ms = runtime_options.inference_interval_ms;
     display_interval_ms = runtime_options.display_interval_ms;
-    printf("YOLO fb mode=%s\n", parallel_output ? "parallel" : "serial");
+    camera_rotation = get_camera_rotation();
+    printf("YOLO fb mode=%s, camera_rotation=%s\n",
+           parallel_output ? "parallel" : "serial",
+           camera_rotation_to_text(camera_rotation));
     if (inference_enable)
     {
         ret = init_yolov5_model(model_path, &rknn_app_ctx);
@@ -1060,6 +1174,7 @@ int main(int argc, char **argv)
 
     //Init Opencv-mobile 
     cv::VideoCapture cap;
+    cv::Mat raw_bgr;
     cv::Mat bgr(fb_info.height, fb_info.width, CV_8UC3); 
     cv::Mat bgr_model_input;
     cap.set(cv::CAP_PROP_FRAME_WIDTH,  fb_info.width);
@@ -1133,15 +1248,16 @@ int main(int argc, char **argv)
         memset(&display_results, 0, sizeof(object_detect_result_list));
         ret = 0;
         loop_start_ms = get_monotonic_ms();
-        cap >> bgr;
+        cap >> raw_bgr;
         capture_end_ms = get_monotonic_ms();
         frame_index++;
-        if (bgr.empty())
+        if (raw_bgr.empty())
         {
             printf("camera frame empty\n");
             usleep(10 * 1000);
             continue;
         }
+        apply_camera_rotation(raw_bgr, &bgr, camera_rotation);
 
         if (inference_enable && parallel_output)
         {
