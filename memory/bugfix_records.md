@@ -20,6 +20,49 @@
 
 ## 历史记录
 
+## 2026-07-04 - [S2/medium][fixed] hxzp overlay Wi-Fi 记忆迁移到 userdata 持久化
+
+- 模块：Buildroot `overlay-luckfox-buildroot-hxzp` Wi-Fi 启动 / `/etc/init.d/S99wlan0` / `/root/tool/wifi_switch.sh`
+- 现象：需要将此前 Wi-Fi 多地点自连和分区放置方案落到 `overlay-luckfox-buildroot-hxzp`，避免保存的 Wi-Fi 只写在 rootfs 中，重烧 rootfs/oem 后丢失记忆。
+- 根因：`hxzp` overlay 中 `S99wlan0` 和 `wifi_switch.sh` 默认使用 `/etc/wpa_supplicant.conf`；该文件位于 rootfs，重新烧录包含 rootfs 的镜像时会被覆盖，不适合作为长期保存 Wi-Fi 账号的位置。
+- 解决方案：启动脚本和切换工具统一优先使用 `/userdata/wpa_supplicant.conf`，`/userdata` 未挂载或不可写时退回 `/etc/wpa_supplicant.conf`；如果系统已有 `wpa_supplicant` 在运行，先执行 `wpa_cli save_config` 将当前已连接/已配置 Wi-Fi 刷回原配置文件，再按当前 SSID 从 `/data/wpa_supplicant.conf` 或 `/etc/wpa_supplicant.conf` 迁移对应 `network` 块到 `/userdata`，避免覆盖已有多地点网络；开机连接成功后再次执行 `save_config`，确保当前网络写入持久分区；在 `overlay-luckfox-buildroot-hxzp/userdata/wpa_supplicant.conf` 中预置 `HXZP` 与 `acemate`，并扩展 `luckfox-userdata-pre.sh` 将各 overlay 下的 `userdata/` 目录拷入 `userdata.img`，让新烧录设备首次启动即可从预置 Wi-Fi 中自动选择可用网络。
+- 验证方式：本地执行 `sh -n project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/etc/init.d/S99wlan0`、`sh -n project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/root/tool/wifi_switch.sh` 和 `bash -n project/cfg/BoardConfig_IPC/luckfox-userdata-pre.sh` 均通过；使用临时 `RK_PROJECT_PACKAGE_USERDATA_DIR` 模拟运行 `luckfox-userdata-pre.sh`，确认能从 `overlay-luckfox-buildroot-hxzp/userdata/` 拷贝 `wpa_supplicant.conf`，且文件包含 `HXZP` 与 `acemate` 两个 enabled network 块、没有 `disabled=1`；尚未重新打包固件并上板重启验证实际持久化自连。
+- 相关文件：
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/etc/init.d/S99wlan0`
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/root/tool/wifi_switch.sh`
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/userdata/wpa_supplicant.conf`
+  - `project/cfg/BoardConfig_IPC/luckfox-userdata-pre.sh`
+  - `project/cfg/BoardConfig_IPC/BoardConfig-EMMC-Buildroot-RV1106_Luckfox_Pico_Zero-IPC.mk`
+- 规避规则：保存型 Wi-Fi 配置不要长期只放 rootfs；有 userdata 分区时优先放 `/userdata/wpa_supplicant.conf`，并在启动脚本和手动切换工具中使用同一份配置，避免开机读取与手动保存分裂。
+- 标签：#wifi #userdata #buildroot #overlay #persistence
+
+## 2026-07-04 - [S2/medium][fixed] Wi-Fi 多地点保存网络开机自连逻辑加固
+
+- 模块：Buildroot overlay Wi-Fi 启动 / `/etc/init.d/S99wlan0` / `/root/tool/wifi_switch.sh`
+- 现象：用户确认 `S99wlan0` 是否需要 `.sh` 后缀，并指出现有启动脚本看不出会在两个地点切换后自动连接已保存 Wi-Fi。
+- 根因：`S99wlan0` 不需要 `.sh` 后缀，Buildroot `rcS` 会执行 `/etc/init.d/S??* start`；但旧脚本只在 `wpa_supplicant` 不存在时启动并立刻执行 `udhcpc`，没有等待保存网络连接完成，且 `wifi_switch.sh` 使用 `select_network` 后可能导致其它已保存网络被禁用，影响多地点自动漫游。
+- 解决方案：重写 overlay 中 `S99wlan0` 启动逻辑，确保基础 wpa 配置存在、拉起 `wlan0`、启动或复用 `wpa_supplicant`、`enable_network all`、`reassociate`、等待 `wpa_state=COMPLETED` 后再执行 DHCP；同步调整 `wifi_switch.sh`，连接保存/新增网络时优先选中当前网络，但保存前重新启用所有网络，并在 DHCP 前等待连接完成。
+- 验证方式：本地执行 `sh -n project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-duck/etc/init.d/S99wlan0` 和 `sh -n project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-duck/root/tool/wifi_switch.sh` 均通过；尚未重新打包固件并上板重启验证实际多地点自连。
+- 相关文件：
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-duck/etc/init.d/S99wlan0`
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-duck/root/tool/wifi_switch.sh`
+- 规避规则：Buildroot init 脚本不依赖 `.sh` 后缀，关键是 `S??*` 命名和可执行权限；多地点 Wi-Fi 自连必须保留多个 network block 为 enabled，避免连接某个 SSID 后永久禁用其它保存网络，DHCP 应在 `wpa_state=COMPLETED` 后执行。
+- 标签：#wifi #wpa-supplicant #buildroot #boot #roaming
+
+## 2026-07-04 - [S2/medium][accepted] BMI088 1kHz pose 用户态链路验证
+
+- 模块：`app/imu_pose` / BMI088 姿态融合
+- 现象：需要参考 `acemate-mcu` 中 IMU pose 融合方案，在 RK 侧写 1kHz 更新应用，并确认频率是否稳定。
+- 根因：姿态融合计算本身耗时很低，1kHz 余量充足；限制点在 Linux 用户态调度和 BMI088 I2C 读取。当前板端设备树已将 BMI088 绑定到内核 `bmi088_i2c`，普通 `/dev/i2c-2` 访问返回 `Device or resource busy`；IIO scan/buffer 路径启用时返回 `Invalid argument`，当前系统未直接形成可用的连续缓冲触发链路。使用实验性 `I2C_SLAVE_FORCE` 直连时，400kHz I2C 读取六轴平均约 496us，约占 1ms 周期一半，存在毫秒级偶发抖动，因此只能作为软实时验证，不能作为硬实时保证。
+- 解决方案：新增 `imu_pose` 应用，移植 acemate 的 Mahony 6轴融合、加速度置信度门控、静止陀螺自动校准和 1kHz 绝对时间循环；增加 `--simulate` 测算法/调度开销，增加显式 `--i2c-force` 用于受控实验验证，默认遇到内核驱动占用时提示原因；补充 README 说明用法、限制和长期建议。
+- 验证方式：本地 `make -C app/imu_pose host` 与 `make -C app/imu_pose` 均通过；板端 `192.168.2.16` 执行 `/userdata/imu_pose --simulate --duration 5 --report-ms 1000 --verbose`，前四个窗口稳定 1000.0Hz、周期约 950-1055us、融合平均约 0.8us，最后窗口出现一次 3008us 抖动；普通 `/userdata/imu_pose --duration 1 --verbose` 返回 `Device or resource busy` 并提示内核驱动占用；`/userdata/imu_pose --i2c-force --no-auto-offset --duration 8 --report-ms 1000 --verbose` 基本维持 1000Hz，读数平均约 496us、融合平均约 3us，8秒内一次窗口出现 `max=2703.8us` 且 `late=1`。
+- 相关文件：
+  - `app/imu_pose/imu_pose.c`
+  - `app/imu_pose/Makefile`
+  - `app/imu_pose/README.md`
+- 规避规则：验证 BMI088 1kHz 时先检查 `/sys/bus/i2c/devices/2-0018` 是否绑定 `bmi088_i2c`；默认不要在生产路径使用 `I2C_SLAVE_FORCE` 抢内核驱动。若要长期稳定 1kHz，优先补齐 BMI088 data-ready 中断/IIO buffered trigger、使用内核推样路径、改 SPI/更高速 I2C，或把 1kHz 采样融合放到 MCU。
+- 标签：#imu #bmi088 #i2c #iio #pose #runtime-verification #soft-realtime
+
 ## 2026-07-04 - [S3/low][fixed] protocol_tool 串口 termios 构建兼容性修复
 
 - 模块：`app/protocol_tool`

@@ -18,7 +18,26 @@ function remove_data()
     lf_rm $RK_PROJECT_PACKAGE_USERDATA_DIR/*.bmp
 }
 
+function copy_userdata_overlay()
+{
+    local board_dir
+    local overlay_dir
+    local overlay_userdata_dir
+
+    board_dir="$(dirname "$(realpath "$BOARD_CONFIG")")"
+    mkdir -p "$RK_PROJECT_PACKAGE_USERDATA_DIR"
+
+    for overlay_dir in $RK_POST_OVERLAY; do
+        overlay_userdata_dir="$board_dir/overlay/$overlay_dir/userdata"
+        if [ -d "$overlay_userdata_dir" ]; then
+            echo "Applying userdata overlay: $overlay_userdata_dir"
+            cp -rfa "$overlay_userdata_dir"/* "$RK_PROJECT_PACKAGE_USERDATA_DIR"/
+        fi
+    done
+}
+
 #=========================
 # run
 #=========================
 remove_data
+copy_userdata_overlay

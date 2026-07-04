@@ -1,0 +1,274 @@
+#!/bin/sh
+
+WIFI_IF="wlan0"
+WIFI_PERSIST_DIR="/userdata"
+WIFI_PERSIST_CONF="${WIFI_PERSIST_DIR}/wpa_supplicant.conf"
+WIFI_DEFAULT_CONF="/etc/wpa_supplicant.conf"
+WIFI_LEGACY_CONF="/data/wpa_supplicant.conf"
+WIFI_CONF="${WIFI_DEFAULT_CONF}"
+WPA_SUPPLICANT_BIN="wpa_supplicant"
+WPA_CLI_BIN="wpa_cli"
+UDHCPC_BIN="udhcpc"
+
+export PATH="/oem/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH}"
+
+wait_userdata_writable()
+{
+    local wait_count=0
+    local test_file="${WIFI_PERSIST_DIR}/.wifi_write_test"
+
+    while [ "${wait_count}" -lt 5 ]; do
+        if grep -q " ${WIFI_PERSIST_DIR} " /proc/mounts 2>/dev/null &&
+            touch "${test_file}" 2>/dev/null; then
+            rm -f "${test_file}"
+            return 0
+        fi
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+
+    return 1
+}
+
+has_wifi_network_config()
+{
+    [ -f "$1" ] && grep -q "^[[:space:]]*network={" "$1"
+}
+
+get_current_wifi_ssid()
+{
+    "${WPA_CLI_BIN}" -i "${WIFI_IF}" status 2>/dev/null |
+        awk -F '=' '/^ssid=/{print $2; exit}'
+}
+
+config_has_ssid()
+{
+    [ -f "$2" ] && awk -v target_ssid="$1" '
+        /^[[:space:]]*ssid="/ {
+            line = $0
+            sub(/^[[:space:]]*ssid="/, "", line)
+            sub(/"[[:space:]]*$/, "", line)
+            if (line == target_ssid) {
+                found = 1
+                exit
+            }
+        }
+        END { exit found ? 0 : 1 }
+    ' "$2"
+}
+
+append_network_for_ssid()
+{
+    local target_ssid="$1"
+    local source_conf="$2"
+    local tmp_file="/tmp/wifi_network_block.$$"
+
+    awk -v target_ssid="${target_ssid}" '
+        /^[[:space:]]*network=\{/ {
+            inside = 1
+            block = $0 ORS
+            matched = 0
+            next
+        }
+        inside {
+            block = block $0 ORS
+            line = $0
+            if (line ~ /^[[:space:]]*ssid="/) {
+                sub(/^[[:space:]]*ssid="/, "", line)
+                sub(/"[[:space:]]*$/, "", line)
+                if (line == target_ssid) {
+                    matched = 1
+                }
+            }
+            if ($0 ~ /^[[:space:]]*\}/) {
+                if (matched) {
+                    printf "%s", block
+                    found = 1
+                    exit
+                }
+                inside = 0
+                block = ""
+                matched = 0
+            }
+        }
+        END { exit found ? 0 : 1 }
+    ' "${source_conf}" > "${tmp_file}" || {
+        rm -f "${tmp_file}"
+        return 1
+    }
+
+    if [ -s "${tmp_file}" ]; then
+        printf "\n" >> "${WIFI_CONF}"
+        cat "${tmp_file}" >> "${WIFI_CONF}"
+        rm -f "${tmp_file}"
+        return 0
+    fi
+
+    rm -f "${tmp_file}"
+    return 1
+}
+
+flush_running_wifi_config()
+{
+    if "${WPA_CLI_BIN}" -i "${WIFI_IF}" ping 2>/dev/null | grep -q "PONG"; then
+        "${WPA_CLI_BIN}" -i "${WIFI_IF}" save_config >/dev/null 2>&1
+    fi
+}
+
+seed_persistent_wifi_config()
+{
+    local current_ssid
+    local source_conf
+
+    current_ssid="$(get_current_wifi_ssid)"
+    if [ -n "${current_ssid}" ] &&
+        ! config_has_ssid "${current_ssid}" "${WIFI_CONF}"; then
+        for source_conf in "${WIFI_LEGACY_CONF}" "${WIFI_DEFAULT_CONF}"; do
+            if [ "${source_conf}" != "${WIFI_CONF}" ] &&
+                config_has_ssid "${current_ssid}" "${source_conf}"; then
+                if [ ! -f "${WIFI_CONF}" ]; then
+                    cp -f "${source_conf}" "${WIFI_CONF}"
+                else
+                    append_network_for_ssid "${current_ssid}" "${source_conf}"
+                fi
+                chmod 600 "${WIFI_CONF}" 2>/dev/null
+                return 0
+            fi
+        done
+    fi
+
+    if has_wifi_network_config "${WIFI_CONF}"; then
+        return 0
+    fi
+
+    for source_conf in "${WIFI_LEGACY_CONF}" "${WIFI_DEFAULT_CONF}"; do
+        if [ "${source_conf}" != "${WIFI_CONF}" ] &&
+            has_wifi_network_config "${source_conf}"; then
+            cp -f "${source_conf}" "${WIFI_CONF}"
+            chmod 600 "${WIFI_CONF}" 2>/dev/null
+            return 0
+        fi
+    done
+
+    if [ ! -f "${WIFI_CONF}" ]; then
+        for source_conf in "${WIFI_LEGACY_CONF}" "${WIFI_DEFAULT_CONF}"; do
+            if [ "${source_conf}" != "${WIFI_CONF}" ] &&
+                [ -f "${source_conf}" ]; then
+                cp -f "${source_conf}" "${WIFI_CONF}"
+                chmod 600 "${WIFI_CONF}" 2>/dev/null
+                return 0
+            fi
+        done
+    fi
+
+    return 1
+}
+
+select_wifi_config()
+{
+    if wait_userdata_writable; then
+        WIFI_CONF="${WIFI_PERSIST_CONF}"
+        seed_persistent_wifi_config >/dev/null 2>&1
+    else
+        WIFI_CONF="${WIFI_DEFAULT_CONF}"
+    fi
+}
+
+ensure_wifi_base_config()
+{
+    if [ ! -f "${WIFI_CONF}" ]; then
+        cat > "${WIFI_CONF}" <<'EOF'
+ctrl_interface=/var/run/wpa_supplicant
+ap_scan=1
+update_config=1
+EOF
+        chmod 600 "${WIFI_CONF}" 2>/dev/null
+    fi
+
+    grep -q "^ctrl_interface=/var/run/wpa_supplicant$" "${WIFI_CONF}" ||
+        printf "ctrl_interface=/var/run/wpa_supplicant\n" >> "${WIFI_CONF}"
+    grep -q "^ap_scan=1$" "${WIFI_CONF}" ||
+        printf "ap_scan=1\n" >> "${WIFI_CONF}"
+    grep -q "^update_config=1$" "${WIFI_CONF}" ||
+        printf "update_config=1\n" >> "${WIFI_CONF}"
+    chmod 600 "${WIFI_CONF}" 2>/dev/null
+}
+
+wait_wpa_ready()
+{
+    local wait_count=0
+
+    while [ "${wait_count}" -lt 10 ]; do
+        if "${WPA_CLI_BIN}" -i "${WIFI_IF}" ping 2>/dev/null | grep -q "PONG"; then
+            return 0
+        fi
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+
+    return 1
+}
+
+wait_wifi_connected()
+{
+    local wait_count=0
+    local state
+
+    while [ "${wait_count}" -lt 30 ]; do
+        state="$("${WPA_CLI_BIN}" -i "${WIFI_IF}" status 2>/dev/null |
+            awk -F '=' '/^wpa_state=/{print $2; exit}')"
+        if [ "${state}" = "COMPLETED" ]; then
+            return 0
+        fi
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+
+    return 1
+}
+
+start_wifi()
+{
+    flush_running_wifi_config
+    select_wifi_config
+    ensure_wifi_base_config
+    ifconfig "${WIFI_IF}" up >/dev/null 2>&1
+
+    killall -9 "${UDHCPC_BIN}" >/dev/null 2>&1
+    killall -9 "${WPA_SUPPLICANT_BIN}" >/dev/null 2>&1
+    killall -9 wpa_supplicant_nl80211 >/dev/null 2>&1
+    mkdir -p /var/run/wpa_supplicant
+    rm -f "/var/run/wpa_supplicant/${WIFI_IF}"
+
+    echo "Starting wpa_supplicant with ${WIFI_CONF}..."
+    "${WPA_SUPPLICANT_BIN}" -B -i "${WIFI_IF}" -c "${WIFI_CONF}"
+
+    if ! wait_wpa_ready; then
+        echo "wpa_supplicant is not ready."
+        return 1
+    fi
+
+    "${WPA_CLI_BIN}" -i "${WIFI_IF}" enable_network all >/dev/null 2>&1
+    "${WPA_CLI_BIN}" -i "${WIFI_IF}" reassociate >/dev/null 2>&1
+
+    if wait_wifi_connected; then
+        "${WPA_CLI_BIN}" -i "${WIFI_IF}" save_config >/dev/null 2>&1
+        "${UDHCPC_BIN}" -i "${WIFI_IF}"
+    else
+        echo "No saved WiFi network connected yet."
+        return 1
+    fi
+}
+
+case $1 in
+        start)
+                start_wifi
+                ;;
+        stop)
+                killall -9 "${UDHCPC_BIN}" >/dev/null 2>&1
+                killall -9 "${WPA_SUPPLICANT_BIN}" >/dev/null 2>&1
+                ;;
+        *)
+                exit 1
+                ;;
+esac

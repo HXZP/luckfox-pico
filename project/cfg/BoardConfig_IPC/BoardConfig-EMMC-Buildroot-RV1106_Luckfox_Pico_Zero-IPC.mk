@@ -127,7 +127,7 @@ export RK_PRE_BUILD_OEM_SCRIPT=luckfox-buildroot-oem-pre.sh
 export RK_PRE_BUILD_USERDATA_SCRIPT=luckfox-userdata-pre.sh
 
 # declare overlay directory
-export RK_POST_OVERLAY="overlay-luckfox-config overlay-luckfox-buildroot-init overlay-luckfox-buildroot-shadow overlay-luckfox-buildroot-duck"
+export RK_POST_OVERLAY="overlay-luckfox-config overlay-luckfox-buildroot-init overlay-luckfox-buildroot-shadow overlay-luckfox-buildroot-hxzp"
 
 # auto sync generated images to Windows path after firmware build
 export RK_OUTPUT_IMAGE_SYNC_DIR="/mnt/c/Users/13241/Downloads/luckfox-zero-image"
