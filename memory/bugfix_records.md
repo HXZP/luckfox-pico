@@ -20,6 +20,19 @@
 
 ## 历史记录
 
+## 2026-07-04 - [S2/medium][fixed] imu_pose 无 data-ready 中断时的用户态采样优化
+
+- 模块：`app/imu_pose` / BMI088 姿态融合
+- 现象：当前硬件没有 BMI088 data-ready 中断，1kHz 用户态轮询采样受 Linux 调度和 I2C 读取耗时影响，前次板端验证出现毫秒级偶发抖动。
+- 根因：没有硬件中断或 IIO buffer 触发时，用户态只能按定时器主动轮询；原实现每个传感器使用一次寄存器写加一次读，系统调用和 I2C transaction 开销较高；姿态积分使用固定周期，遇到晚唤醒时不能反映实际采样间隔。
+- 解决方案：默认使用 `I2C_RDWR` combined register read 读取 BMI088 accel/gyro，失败时自动回退到原 write/read 路径；新增 `--wake-margin-us` 在绝对时间唤醒前短忙等，减少定时器唤醒误差；新增 `--cpu` 与 `--fifo-priority` 便于固定 CPU 和调整实时优先级；默认用实测 loop `dt` 做融合积分，并提供 `--fixed-dt` 对比测试；README 补充无 data-ready 时的推荐实验命令和限制。
+- 验证方式：本地 `make -C app/imu_pose host` 与 `make -C app/imu_pose` 均通过；执行 `app/imu_pose/build/imu_pose-host --simulate --duration 1 --report-ms 500 --wake-margin-us 50 --no-realtime --fixed-dt` 正常输出 1kHz 统计且无 read/update 错误；尚未上传板端验证 `I2C_RDWR` 是否被当前内核/I2C 适配器接受以及实际抖动改善幅度。
+- 相关文件：
+  - `app/imu_pose/imu_pose.c`
+  - `app/imu_pose/README.md`
+- 规避规则：无 BMI088 data-ready 中断时，用户态优化只能降低抖动和测试误差，不能提供硬实时保证；验证时需同时比较 `--i2c-rdwr` 与 `--no-i2c-rdwr`，并记录 read_us/max、late_count 和周期 max。
+- 标签：#imu #bmi088 #i2c #realtime #sampling #soft-realtime
+
 ## 2026-07-04 - [S2/medium][fixed] hxzp overlay Wi-Fi 记忆迁移到 userdata 持久化
 
 - 模块：Buildroot `overlay-luckfox-buildroot-hxzp` Wi-Fi 启动 / `/etc/init.d/S99wlan0` / `/root/tool/wifi_switch.sh`
