@@ -24,7 +24,11 @@ function copy_userdata_overlay()
     local overlay_dir
     local overlay_userdata_dir
 
-    board_dir="$(dirname "$(realpath "$BOARD_CONFIG")")"
+    if [ -n "$BOARD_CONFIG" ] && [ -e "$BOARD_CONFIG" ]; then
+        board_dir="$(dirname "$(realpath "$BOARD_CONFIG")")"
+    else
+        board_dir="$(cd "$(dirname "$0")" && pwd)"
+    fi
     mkdir -p "$RK_PROJECT_PACKAGE_USERDATA_DIR"
 
     for overlay_dir in $RK_POST_OVERLAY; do

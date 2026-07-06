@@ -1482,7 +1482,7 @@ function __PACKAGE_USERDATA() {
 	fi
 	if [ -d "$userdata_app" ]; then
 		if [ "$(ls -A $userdata_app)" ]; then
-			cp -rfa $RK_PROJECT_PATH_MEDIA/install_to_userdata/* $RK_PROJECT_PACKAGE_USERDATA_DIR
+			cp -rfa $RK_PROJECT_PATH_APP/install_to_userdata/* $RK_PROJECT_PACKAGE_USERDATA_DIR
 		fi
 	fi
 }
@@ -2494,6 +2494,7 @@ function post_overlay() {
 	for overlay_dir in $RK_POST_OVERLAY; do
 		if [ -d "$tmp_path/overlay/$overlay_dir" ]; then
 			rsync -a --ignore-times --keep-dirlinks --chmod=u=rwX,go=rX --exclude .empty \
+				--exclude userdata \
 				$tmp_path/overlay/$overlay_dir/* $RK_PROJECT_PACKAGE_ROOTFS_DIR/
 		fi
 	done

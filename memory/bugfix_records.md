@@ -20,6 +20,81 @@
 
 ## 历史记录
 
+## 2026-07-04 - [S1/high][investigating] YOLO 与 IMU 并行压测后板端网络失联
+
+- 模块：板端运行验证 / Wi-Fi 自连 / `imu_pose` / `yolo_fb_detect`
+- 现象：烧录后使用新 root 密码可 SSH 登录，旧默认密码被拒绝；`wlan0` 自动连接 `HXZP` 并获得 `192.168.2.16`；用户重启板子后，BMI088 IIO 设备恢复可见，`imu_pose` 默认 IIO hrtimer buffer 路径可跑 1kHz，YOLO 可启动并持续输出 `ret=0` 检测日志。但 YOLO 与 IMU 并行压测后，板端再次从网络消失，`192.168.2.16` 与备用 `172.32.0.93` 均不可达。
+- 根因：investigating。已确认主机侧 `192.168.2.10/24` 路由正常、网关 `192.168.2.1` 可达，失联时邻居表中 `192.168.2.16 dev eth0 FAILED`；板端在高负载验证后从二层网络上消失。尚未确认是 Wi-Fi 驱动掉线、系统重启、系统卡死、YOLO/摄像头负载触发资源问题，还是电源/无线链路问题。由于失联发生后无法抓取板端现场日志，不能把根因写成结论。
+- 解决方案：暂无针对失联问题的最终代码修复；本轮完成重启后复测和问题留痕。后续需要接串口 2 调试口或其它稳定控制通道，压测时同步抓 `dmesg -w`、`logread -f`、`/proc/uptime`、`free`、`top`、`wpa_cli status`、YOLO `stream.log`，并确认失联瞬间是否伴随内核 panic、重启、OOM、Wi-Fi deauth 或供电跌落。
+- 验证方式：用户重启后，`sshpass` 使用 `hxzp` 登录 `192.168.2.16` 成功；`wpa_cli status` 显示 `ssid=HXZP`、`wpa_state=COMPLETED`、`ip_address=192.168.2.16`；`/sys/bus/iio/devices/iio:device1/name` 为 `bmi088`。单独运行 `/userdata/imu_pose --duration 8 --report-ms 1000` 时，IIO 路径 8 秒基本维持 1000Hz，1 个窗口出现约 2.96ms 尖峰，`errors read=0 update=0`。启动 `/userdata/yolo_fb_detect_demo/run.sh start parallel 1000 30` 后日志持续 `ret=0` 并有检测输出，帧处理多在 50-80ms，30ms 周期下持续 overrun。YOLO 运行时再跑 IMU 8 秒，仍接近 1kHz，2 个窗口出现约 2.9ms 尖峰，`errors read=0 update=0`。停止 YOLO 后再次做收尾检查时，SSH 返回 `No route to host`；随后 `ping 192.168.2.16` 为 `Destination Host Unreachable`，`ping 172.32.0.93` 100% 丢包，主机网关 `192.168.2.1` ping 正常。
+- 后续验证：准备单独测试 YOLO 时，板端一度未恢复在线；`ping 192.168.2.16` 与 `ping 172.32.0.93` 均 100% 丢包，`ssh root@192.168.2.16` 返回 `No route to host`。用户重新上电/重启后，`192.168.2.16` 恢复可达，`/proc/uptime` 约 59 秒，Wi-Fi 为 `COMPLETED`。只启动 `/userdata/yolo_fb_detect_demo/run.sh start parallel 1000 30`，不启动 IMU，持续采样 60 秒：YOLO 日志持续 `ret=0`，帧号从约 143 增至 1054，帧处理多在 36-81ms，仍因 30ms 周期持续 overrun；板端 `wpa_state=COMPLETED`、IP 保持 `192.168.2.16`，主机侧 70 次 ping 全部成功，RTT min/avg/max 为 2.216/3.369/14.379ms。停止 YOLO 后进程退出，SSH 仍可登录，Wi-Fi 仍为 `COMPLETED`。只启动 `/userdata/imu_pose --duration 60 --report-ms 1000`，不启动 YOLO，采集资源占用：`imu_pose` 为单线程，`VmSize` 约 788KB，`VmRSS` 约 724KB，`ps` 采样显示 CPU 约 1.3-2.0%，内存可用约 117-118MB，运行期间 `wpa_state=COMPLETED`，主机侧 70 次 ping 全部成功，RTT min/avg/max 为 2.173/3.292/17.950ms。IMU 60 秒日志无 read/update 错误，多数窗口 1000Hz，偶发约 2.8-3.1ms 尖峰并出现少量 `late=1`。将 IMU 降频到 200Hz 后，再与 YOLO 并行 60 秒：命令为 `/userdata/imu_pose --rate 200 --duration 60 --report-ms 1000` 加 `/userdata/yolo_fb_detect_demo/run.sh start parallel 1000 30`；IMU 约 0.6-0.7% CPU、RSS 724KB，所有 200Hz 窗口均 `errors read=0 update=0` 且 `late=0`，典型周期约 5000us，最大窗口约 6788us；YOLO 持续 `ret=0`，帧号约 41 到 1020，仍有 30ms 周期 overrun，个别帧处理到 103-136ms；板端 Wi-Fi 全程 `COMPLETED`，主机侧 85 次 ping 全部成功，RTT min/avg/max 为 2.214/3.393/17.583ms，停止后 YOLO/IMU 均退出且 SSH正常。随后单独做 IMU 极限频率阶梯扫描，`500/1000/1500Hz` 可基本跟住且无读写错误，1500Hz 只有少量 late；`1600Hz` 实际约 1590-1598Hz、每秒约 2-8 次 late；`1800Hz` 实际约 1749-1774Hz、每秒约 26-48 次 late；`2000Hz` 实际约 1911-1943Hz、每秒约 57-85 次 late；`3000/4000/5000Hz` 请求频率已无实际意义，吞吐被 IIO/传感器 ODR 限在约 1.5-2.0kHz 且每帧都 late；测试期间网络 75 次 ping 全通，结束后板端仍在线。再进行 YOLO 全程开启、IMU 从 100Hz 到 1600Hz 按 100Hz 步进的并发测试，每档 10 秒，共 16 档：所有档位退出状态均为 0，IMU `read/update` 错误均为 0；100-1300Hz 基本稳定，仅个别窗口 `late=1`；1400Hz 开始 `late` 增多但仍为少量；1500Hz 每秒约 1-9 次 `late`；1600Hz 实际约 1580-1591Hz、每秒约 9-18 次 `late`；YOLO 全程 `ret=0` 但持续 30ms overrun；主机侧 210 次 ping 全通，RTT min/avg/max 为 2.190/3.138/8.450ms，停止后 YOLO/IMU 均退出且 SSH 正常。再做 YOLO + IMU 1kHz 连续 5 分钟复现测试：`/userdata/imu_pose --rate 1000 --duration 300 --report-ms 1000` 正常退出，`IMU_END status=0`，300 个有效统计窗口平均 999.60Hz、范围 997.80-1000.20Hz，`late` 总数 60 且单窗口最大 1，`read/update` 错误均为 0，最大周期约 3197.5us；YOLO 最后帧号 4543，最后日志仍为 `ret=0`，停止成功且无残留 YOLO/IMU 进程；主机侧覆盖测试和收尾阶段的 464 次 ping 全通，RTT min/avg/max 为 2.103/3.452/36.381ms，板端 `wpa_state=COMPLETED`、SSH 正常。结论：YOLO 并发短测下 1300Hz 以内余量较好，1400-1500Hz 可用但已有 `late`，1600Hz 不建议长期生产；本轮 5 分钟未复现失联，说明 YOLO + 1kHz IMU 不是必现掉线条件，但仍建议生产优先 1000Hz 或 200Hz，并继续通过串口日志定位偶发失联是否与供电/热/Wi-Fi 驱动或其它系统负载交互有关。
+- 相关文件：
+  - `app/imu_pose/imu_pose.c`
+  - `app/imu_pose/README.md`
+  - `app/rknn/install/uclibc/yolo_fb_detect/run.sh`
+  - `app/rknn/install/uclibc/yolo_fb_detect/yolo_fb_detect`
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/etc/init.d/S99wlan0`
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/root/tool/wifi_switch.sh`
+- 规避规则：上板压测时先单独保存基线，再启动重负载做对比，并在压测前后立即采集板端日志；读取 Wi-Fi 配置时只输出 SSID 和 network 数量，不打印 PSK；如果测试过程中板端失联，应先区分主机路由问题、Wi-Fi 链路问题和系统重启/卡死。
+- 标签：#runtime-verification #wifi #root-password #imu #yolo #network-drop #investigating
+
+## 2026-07-04 - [S2/medium][fixed] 预置多 Wi-Fi 被运行时写回成单网络
+
+- 模块：Buildroot `hxzp` overlay / Wi-Fi 启动 / `/userdata/wpa_supplicant.conf`
+- 现象：镜像侧预置的 `/userdata/wpa_supplicant.conf` 包含 `HXZP` 与 `acemate` 两个网络，但烧录并启动后的板端 `/userdata/wpa_supplicant.conf`、`/etc/wpa_supplicant.conf`、`/data/wpa_supplicant.conf` 都只剩 `HXZP` 一个网络；`wpa_supplicant` 使用 `/userdata/wpa_supplicant.conf`，同时板端存在 `rkwifi_server` 进程。
+- 根因：启动链路中存在多处运行时写回配置的入口：`S99wlan0` 启动前会尝试 `wpa_cli save_config`，连接成功后也会 `save_config`；`wifi_switch.sh status/restart` 路径也会先刷运行中配置。首次启动或系统自带 `rkwifi_server` 先拉起单网络配置后，这些写回动作可能把当前内存中的单网络配置覆盖到 `/userdata`，从而丢掉预置的其它地点 Wi-Fi。
+- 解决方案：在 `overlay-luckfox-buildroot-hxzp/etc/wpa_supplicant.conf` 同步预置 `HXZP` 与 `acemate`，保证 rootfs 默认配置和 userdata 预置配置一致；`S99wlan0` 启动时停止 `rkwifi_server` 后再拉起自己的 `wpa_supplicant`，并移除启动/连接完成时的自动 `save_config`；`wifi_switch.sh` 在重启 Wi-Fi 栈时同样停止 `rkwifi_server`，移除 status/restart 路径的自动刷写，只保留用户主动 `connect`/修改网络时的 `save_config`。
+- 验证方式：执行 `sh -n project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/etc/init.d/S99wlan0` 与 `sh -n project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/root/tool/wifi_switch.sh` 通过；执行 `./build.sh firmware` 成功生成 `output/image/update.img`；脱敏检查 `output/out/rootfs_uclibc_rv1106/etc/wpa_supplicant.conf` 与 `output/out/userdata/wpa_supplicant.conf` 均为 2 个 network，SSID 为 `HXZP` 和 `acemate`。同步到 `/mnt/c/Users/13241/Downloads/luckfox-zero-image` 仍因目录只读失败，但不影响 `output/image/update.img`。
+- 相关文件：
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/etc/wpa_supplicant.conf`
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/userdata/wpa_supplicant.conf`
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/etc/init.d/S99wlan0`
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/root/tool/wifi_switch.sh`
+- 规避规则：预置多 Wi-Fi 时，rootfs 默认配置和 userdata 初始配置要保持同一组网络；开机自连路径不要无条件 `wpa_cli save_config`，保存动作只应发生在用户主动新增或修改网络后。
+- 标签：#wifi #wpa-supplicant #userdata #overlay #rkwifi-server #persistence
+
+## 2026-07-04 - [S2/medium][fixed] 烧录后 root 密码回退并开机自动播放喇叭测试
+
+- 模块：Buildroot `hxzp` overlay / OEM `RkLunch.sh` 启动脚本
+- 现象：烧录新镜像后 root 密码仍恢复为默认 `luckfox`，不能保持为目标密码；系统开机后会自动播放喇叭测试音。
+- 根因：当前板卡 `RK_POST_OVERLAY` 中会加载 `overlay-luckfox-buildroot-shadow`，其中 `/etc/shadow` 仍是默认 root 密码 hash，`overlay-luckfox-buildroot-hxzp` 未覆盖该文件；OEM 应用启动脚本 `/oem/usr/bin/RkLunch.sh` 在开机 `post_chk` 阶段只要检测到 `/oem/usr/share/speaker_test.wav` 就会调用 `rk_mpi_ao_test` 自动播放。
+- 解决方案：在 `overlay-luckfox-buildroot-hxzp/etc/shadow` 增加 hxzp 专用 root 密码覆盖文件，利用 hxzp overlay 最后同步的顺序覆盖默认 shadow；在 `luckfox-buildroot-oem-pre.sh` 增加 `disable_auto_speaker_test()`，打包 OEM 时将 `RkLunch.sh` 的播放条件改为同时要求 `/userdata/enable_speaker_test` 存在，默认不开机播放，需要产测时可手动创建该开关文件恢复测试音。
+- 验证方式：执行 `bash -n project/cfg/BoardConfig_IPC/luckfox-buildroot-oem-pre.sh` 通过；重新执行 `./build.sh firmware` 成功生成 `output/image/update.img`，日志显示 `Making -RK1106 update.img OK`；检查 `output/out/rootfs_uclibc_rv1106/etc/shadow` 首行 root hash 为 hxzp 目标 hash；检查 `output/out/oem/usr/bin/RkLunch.sh` 中喇叭测试条件已变为 `/userdata/enable_speaker_test` 与 `speaker_test.wav` 同时存在。同步到 `/mnt/c/Users/13241/Downloads/luckfox-zero-image` 仍因该目录只读失败，但不影响 `output/image` 下固件产物。
+- 相关文件：
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/etc/shadow`
+  - `project/cfg/BoardConfig_IPC/luckfox-buildroot-oem-pre.sh`
+  - `project/app/rkipc/rkipc/src/rv1106_ipc/RkLunch.sh`
+- 规避规则：板卡专用默认账号密码应在最后生效的 board overlay 中覆盖，避免修改全局 shadow overlay 影响其它板型；开机产测类音频不要以资源文件存在作为默认触发条件，必须增加显式 enable 开关。
+- 标签：#root-password #shadow #overlay #oem #speaker-test #boot
+
+## 2026-07-04 - [S2/medium][fixed] firmware 打包时 userdata overlay 被误同步到 rootfs
+
+- 模块：`project/build.sh` / Buildroot overlay / userdata 预置文件
+- 现象：执行 `./build.sh firmware` 时，`post_overlay` 阶段 `rsync` 报错：`chown ".../rootfs_uclibc_rv1106/userdata" failed: Operation not permitted` 和 `mkstemp ".../userdata/.wpa_supplicant.conf..." failed: Permission denied`，固件打包退出 code 23。
+- 根因：`overlay-luckfox-buildroot-hxzp/userdata/` 是为 `luckfox-userdata-pre.sh` 预置到 `userdata.img` 的目录，但 `post_overlay` 同步 rootfs overlay 时也把顶层 `userdata/` 拷到 rootfs 的 `/userdata` 挂载点；该目录来自 rootfs tarball，属主为 `nobody:nogroup`，在当前工作区权限下 `rsync` 无法写入其中的临时文件。另一个打包边界问题是 `luckfox-userdata-pre.sh` 在子进程中可能拿不到 `BOARD_CONFIG`，导致找不到当前 board overlay 下的 `userdata/`。
+- 解决方案：在 `post_overlay` 的 rootfs overlay rsync 中排除顶层 `userdata`，让 userdata 预置文件只通过 `luckfox-userdata-pre.sh` 进入 `userdata.img`；修正 `__PACKAGE_USERDATA()` 中 app userdata 源路径误写为 media userdata 的问题；为 `luckfox-userdata-pre.sh` 增加 `BOARD_CONFIG` 为空时按脚本自身目录定位 `BoardConfig_IPC` 的兜底。
+- 验证方式：重新执行 `./build.sh firmware` 成功生成 `output/image/update.img`，日志显示 `Making -RK1106 update.img OK`；`output/out/userdata` 中确认存在 `imu_pose` 和 `wpa_supplicant.conf`；`sysdrv/source/objs_kernel/.config` 中确认 `CONFIG_IIO_CONFIGFS=y`、`CONFIG_IIO_SW_TRIGGER=y`、`CONFIG_IIO_HRTIMER_TRIGGER=y`、`CONFIG_CONFIGFS_FS=y`。同步到 `/mnt/c/Users/13241/Downloads/luckfox-zero-image` 因该目录只读失败，但不影响 `output/image` 下固件产物。
+- 相关文件：
+  - `project/build.sh`
+  - `project/cfg/BoardConfig_IPC/luckfox-userdata-pre.sh`
+  - `project/cfg/BoardConfig_IPC/overlay/overlay-luckfox-buildroot-hxzp/userdata/wpa_supplicant.conf`
+- 规避规则：把 overlay 下的 `userdata/` 作为分区镜像预置目录时，rootfs overlay 同步阶段必须排除它，避免同时写入 rootfs 挂载点目录。
+- 标签：#firmware #userdata #overlay #buildroot #rsync
+
+## 2026-07-04 - [S2/medium][fixed] imu_pose 接入 IIO hrtimer trigger buffer 方案
+
+- 模块：`app/imu_pose` / BMI088 IIO buffered sampling / RK 内核配置
+- 现象：前面讨论的是使用 IIO hrtimer trigger + buffer 方案解决无 BMI088 data-ready 中断时的采样稳定性问题，但已提交的 `imu_pose` 实现仍以用户态定时循环加直接 I2C 读取为主，没有真正从 IIO buffer 读取。
+- 根因：已有 BMI088 内核驱动其实已经注册 `devm_iio_triggered_buffer_setup()`，但板级内核 fragment 未打开 `CONFIG_IIO_CONFIGFS`、`CONFIG_IIO_SW_TRIGGER`、`CONFIG_IIO_HRTIMER_TRIGGER`，用户态应用也没有创建 hrtimer trigger、配置 scan_elements、开启 buffer 并从 `/dev/iio:deviceX` 读帧。
+- 解决方案：在 `rv1106-bt.config` 中启用 configfs/IIO software trigger/hrtimer trigger；`imu_pose` 默认切到 IIO hrtimer trigger + buffer 输入源，新增 `--iio`、`--i2c`、`--iio-device`、`--iio-trigger`、`--iio-buffer` 参数；应用会自动寻找 `bmi088` IIO 设备，创建 `imu_pose_hrtimer`，设置 trigger 频率、BMI088 accel/gyro ODR、scan_elements、buffer length 和 current_trigger，然后阻塞读取 IIO buffer 帧做 Mahony6 融合；保留 `--i2c`/`--i2c-force` 作为实验兜底路径。
+- 验证方式：本地执行 `make -C app/imu_pose host` 与 `make -C app/imu_pose` 均通过且无编译告警；执行 `app/imu_pose/build/imu_pose-host --simulate --duration 1 --report-ms 500 --no-realtime` 正常输出统计；执行 `app/imu_pose/build/imu_pose-host --help` 确认 IIO 参数已暴露。尚未重新编译/烧录内核并在板端验证 `/sys/kernel/config/iio/triggers/hrtimer`、`/dev/iio:deviceX` 的真实 1kHz buffer 读帧稳定性。
+- 相关文件：
+  - `app/imu_pose/imu_pose.c`
+  - `app/imu_pose/README.md`
+  - `sysdrv/source/kernel/arch/arm/configs/rv1106-bt.config`
+- 规避规则：讨论 IIO buffer 方案时，必须同时检查三层是否都落地：内核 IIO 驱动有 triggered buffer、内核配置提供可创建的 trigger、用户态从 IIO char device 阻塞读 buffer；只优化用户态 sleep/I2C 轮询不能算完成 IIO hrtimer trigger + buffer 方案。
+- 标签：#imu #bmi088 #iio #hrtimer #buffer #kernel-config #sampling
+
 ## 2026-07-04 - [S2/medium][fixed] imu_pose 无 data-ready 中断时的用户态采样优化
 
 - 模块：`app/imu_pose` / BMI088 姿态融合

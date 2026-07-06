@@ -158,15 +158,6 @@ append_network_for_ssid()
     return 1
 }
 
-# 如果已有 wpa_supplicant 在运行，先把当前内存配置刷到它自己的配置文件。
-flush_running_wifi_config()
-{
-    if "${WPA_CLI_BIN}" -i "${WIFI_IF}" ping 2>/dev/null | grep -q "PONG"
-    then
-        "${WPA_CLI_BIN}" -i "${WIFI_IF}" save_config >/dev/null 2>&1
-    fi
-}
-
 # 第一次使用 userdata 时，从旧位置迁移已经保存过的 WiFi 网络。
 seed_persistent_wifi_config()
 {
@@ -293,6 +284,7 @@ bring_wifi_interface_up()
 stop_wifi_processes()
 {
     killall -9 "${UDHCPC_BIN}" >/dev/null 2>&1
+    killall -9 rkwifi_server >/dev/null 2>&1
     killall -9 "${WPA_SUPPLICANT_BIN}" >/dev/null 2>&1
     killall -9 wpa_supplicant_nl80211 >/dev/null 2>&1
 }
@@ -344,7 +336,6 @@ wait_wifi_connected()
 # 重启 WiFi 连接栈，确保配置变更能立即生效。
 restart_wifi_stack()
 {
-    flush_running_wifi_config
     select_wifi_config
     ensure_wifi_base_config
     bring_wifi_interface_up
@@ -384,7 +375,6 @@ print_wifi_status()
     local current_ip
     local current_state
 
-    flush_running_wifi_config
     select_wifi_config
     current_ssid="$("${WPA_CLI_BIN}" -i "${WIFI_IF}" status 2>/dev/null | awk -F '=' '/^ssid=/{print $2; exit}')"
     current_ip="$(ifconfig "${WIFI_IF}" 2>/dev/null | awk '/inet addr:/{sub("addr:", "", $2); print $2; exit} /^ *inet /{print $2; exit}')"

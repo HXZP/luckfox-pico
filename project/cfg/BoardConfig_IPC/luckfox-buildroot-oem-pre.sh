@@ -43,7 +43,26 @@ function remove_data()
     lf_rm $RK_PROJECT_PACKAGE_OEM_DIR/usr/share/vqefiles/*
 }
 
+function disable_auto_speaker_test()
+{
+    local rk_lunch="$RK_PROJECT_PACKAGE_OEM_DIR/usr/bin/RkLunch.sh"
+
+    if [ ! -f "$rk_lunch" ]; then
+        echo "Skip speaker-test patch: $rk_lunch not found"
+        return
+    fi
+
+    if grep -q '/userdata/enable_speaker_test' "$rk_lunch"; then
+        return
+    fi
+
+    sed -i \
+        's#\[ -f "/oem/usr/share/speaker_test.wav" \]#[ -f "/userdata/enable_speaker_test" ] \&\& [ -f "/oem/usr/share/speaker_test.wav" ]#' \
+        "$rk_lunch"
+}
+
 #=========================
 # run
 #=========================
 remove_data
+disable_auto_speaker_test

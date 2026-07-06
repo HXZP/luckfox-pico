@@ -8,6 +8,7 @@ pose fusion scheme to Linux user space:
 - Accel norm confidence gate.
 - Static gyro auto-offset calibration.
 - Absolute-time 1 kHz loop with per-window timing statistics.
+- BMI088 IIO hrtimer trigger + buffered reads.
 - Combined `I2C_RDWR` register reads by default, with fallback to the simple
   write/read path.
 - Optional CPU affinity, FIFO priority and short busy-wait wake margin for
@@ -30,10 +31,24 @@ Simulated IMU input, useful for measuring scheduler and fusion overhead:
 /userdata/imu_pose --simulate --duration 5 --report-ms 1000 --verbose
 ```
 
+BMI088 IIO hrtimer trigger + buffer input:
+
+```sh
+/userdata/imu_pose --iio --duration 30 --report-ms 1000 --verbose
+```
+
+This is also the default runtime source, so `--iio` can be omitted after the
+kernel is rebuilt. It is the preferred RK-side path when the BMI088 is bound to the kernel
+`bmi088_i2c` driver. The app creates an IIO hrtimer trigger named
+`imu_pose_hrtimer`, sets it to `--rate`, enables the six BMI088 scan channels,
+enables the IIO buffer, then blocks on `/dev/iio:deviceX`. In this mode the
+sampling tick comes from the kernel hrtimer trigger instead of the user-space
+sleep loop.
+
 Direct BMI088 I2C input:
 
 ```sh
-/userdata/imu_pose --duration 10 --report-ms 1000 --verbose
+/userdata/imu_pose --i2c --duration 10 --report-ms 1000 --verbose
 ```
 
 On the current board, the BMI088 is already registered by the kernel as
@@ -64,6 +79,12 @@ force the fallback for A/B testing with `--no-i2c-rdwr`.
 - `--duration <sec>`: run time, `0` means forever.
 - `--report-ms <ms>`: timing report interval, default `1000`.
 - `--kp <value>` / `--ki <value>`: Mahony gains, default `0.1` / `0.0`.
+- `--iio`: use the BMI088 IIO hrtimer trigger + buffer path, default on.
+- `--i2c`: use direct BMI088 I2C register reads instead of IIO.
+- `--iio-device <name>`: select an IIO device by path, `iio:deviceX`, or name;
+  default is the first device whose IIO name contains `bmi088`.
+- `--iio-trigger <name>`: hrtimer trigger name, default `imu_pose_hrtimer`.
+- `--iio-buffer <n>`: IIO buffer length, default `32`.
 - `--no-auto-offset`: skip startup static gyro calibration.
 - `--no-realtime`: skip `mlockall` and `SCHED_FIFO`.
 - `--wake-margin-us <us>`: sleep until just before the next tick, then busy-wait;
@@ -73,6 +94,28 @@ force the fallback for A/B testing with `--no-i2c-rdwr`.
 - `--fixed-dt`: integrate with nominal period instead of measured loop period.
 - `--no-i2c-rdwr`: disable combined I2C register reads for comparison.
 - `--bus <n>` / `--accel-addr <addr>` / `--gyro-addr <addr>`: I2C selection.
+
+## IIO Kernel Requirements
+
+The BMI088 kernel driver already registers an IIO triggered buffer. The hrtimer
+trigger still needs these kernel options:
+
+```text
+CONFIG_CONFIGFS_FS=y
+CONFIG_IIO_CONFIGFS=y
+CONFIG_IIO_SW_TRIGGER=y
+CONFIG_IIO_HRTIMER_TRIGGER=y
+```
+
+They are enabled in `sysdrv/source/kernel/arch/arm/configs/rv1106-bt.config`.
+Rebuild and flash the kernel/boot image before using `--iio`; otherwise
+`/sys/kernel/config/iio/triggers/hrtimer` will not exist and the app will report
+an IIO init error.
+
+For 1 kHz, the app sets the hrtimer trigger to `1000 Hz`, the gyro ODR to
+`1000 Hz`, and the accel ODR to the nearest supported value at or above the
+requested rate. BMI088 accel has no exact `1000 Hz` ODR, so it uses `1600 Hz`
+for a 1 kHz trigger.
 
 ## 1 kHz Stability Notes
 
@@ -87,9 +130,15 @@ Conclusion: the fusion math has enough margin for 1 kHz. The limiting factors
 are Linux user-space scheduling and I2C transfer latency. At 400 kHz I2C, reading
 accel and gyro separately consumes about half of each 1 ms period, so this is
 soft real-time only. The user-space mitigations above help reduce jitter and
-make testing more repeatable, but they are still not a hard real-time substitute
-for data-ready driven sampling. For a production-stable 1 kHz path, prefer one
-of:
+make testing more repeatable.
+
+The IIO hrtimer trigger + buffer path removes the user-space timer loop and
+avoids `I2C_SLAVE_FORCE` racing the kernel driver, so it should be the next path
+to validate on the board. It is still timer-triggered, not data-ready triggered:
+the hrtimer fires at 1 kHz and the kernel reads the current BMI088 registers.
+That is much cleaner than user-space polling, but still not a hard real-time
+substitute for a real sensor data-ready interrupt. For a production-stable 1 kHz
+path, prefer one of:
 
 - BMI088 data-ready interrupt plus IIO buffered reads.
 - A kernel driver path that pushes samples without sysfs polling.

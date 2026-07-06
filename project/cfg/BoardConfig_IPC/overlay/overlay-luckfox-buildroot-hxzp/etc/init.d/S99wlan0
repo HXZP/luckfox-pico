@@ -108,13 +108,6 @@ append_network_for_ssid()
     return 1
 }
 
-flush_running_wifi_config()
-{
-    if "${WPA_CLI_BIN}" -i "${WIFI_IF}" ping 2>/dev/null | grep -q "PONG"; then
-        "${WPA_CLI_BIN}" -i "${WIFI_IF}" save_config >/dev/null 2>&1
-    fi
-}
-
 seed_persistent_wifi_config()
 {
     local current_ssid
@@ -229,12 +222,12 @@ wait_wifi_connected()
 
 start_wifi()
 {
-    flush_running_wifi_config
     select_wifi_config
     ensure_wifi_base_config
     ifconfig "${WIFI_IF}" up >/dev/null 2>&1
 
     killall -9 "${UDHCPC_BIN}" >/dev/null 2>&1
+    killall -9 rkwifi_server >/dev/null 2>&1
     killall -9 "${WPA_SUPPLICANT_BIN}" >/dev/null 2>&1
     killall -9 wpa_supplicant_nl80211 >/dev/null 2>&1
     mkdir -p /var/run/wpa_supplicant
@@ -252,7 +245,6 @@ start_wifi()
     "${WPA_CLI_BIN}" -i "${WIFI_IF}" reassociate >/dev/null 2>&1
 
     if wait_wifi_connected; then
-        "${WPA_CLI_BIN}" -i "${WIFI_IF}" save_config >/dev/null 2>&1
         "${UDHCPC_BIN}" -i "${WIFI_IF}"
     else
         echo "No saved WiFi network connected yet."
