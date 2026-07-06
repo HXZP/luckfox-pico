@@ -23,6 +23,17 @@ make -C app/imu_pose host
 
 The cross build writes `app/imu_pose/build/imu_pose`.
 
+## Source Layout
+
+- `imu_pose.c`: CLI parsing, realtime setup and the main sampling/fusion loop.
+- `imu_pose.h`: shared data types, defaults and module interfaces.
+- `iio_backend.c`: BMI088 IIO hrtimer trigger + buffer setup and reads.
+- `bmi088.c`: direct BMI088 I2C register setup and reads.
+- `pose_filter.c`: Mahony 6-axis pose fusion and gyro auto-offset logic.
+- `loop_stats.c`: timing/error statistics and report printing.
+- `imu_sim.c`: generated IMU samples for host and scheduler tests.
+- `imu_pose_utils.c`: time, parsing, sysfs and small math helpers.
+
 ## Run
 
 Simulated IMU input, useful for measuring scheduler and fusion overhead:

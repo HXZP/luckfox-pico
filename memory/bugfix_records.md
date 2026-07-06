@@ -20,6 +20,17 @@
 
 ## 历史记录
 
+## 2026-07-06 - [S2/medium][investigating] git pull 无法连接 GitHub 443
+
+- 模块：Git 远端同步 / GitHub HTTPS 网络访问
+- 现象：执行 `git pull --tags origin zero` 失败，报错为 `Failed to connect to github.com port 443 ... Couldn't connect to server`。当前仓库 `origin` 指向 `https://github.com/HXZP/luckfox-pico.git`，本地分支为 `zero`，状态为相对 `origin/zero` ahead 3。
+- 根因：已确认不是本地分支冲突或认证阶段失败，而是在访问 GitHub HTTPS 远端前的网络连接阶段卡住；本地未配置 Git HTTP/HTTPS proxy，环境变量中也未设置 `http_proxy`/`https_proxy`；只读执行 `git ls-remote --heads origin zero` 同样长时间无返回并被中断。更底层原因仍需结合当前网络出口、代理、防火墙或 DNS 环境继续确认。
+- 解决方案：暂无代码修改。需要先恢复当前环境到 `github.com:443` 的连通性，或配置可用代理/SSH 远端后再执行 `git fetch`/`git pull`。
+- 验证方式：已检查 `git remote -v`、`git branch -vv`、Git proxy 配置和代理环境变量；`git ls-remote --heads origin zero` 只读探测 30 秒无返回，符合 GitHub 443 连接不可用的表现。
+- 相关文件：无代码文件变更，仅记录排查。
+- 规避规则：GitHub HTTPS 超时报错优先区分网络连通性、代理配置、认证失败和分支冲突；在远端不可达时不要继续做合并/重置类操作，先用 `git ls-remote` 或 `git fetch` 验证连通性。
+- 标签：#git #github #network #proxy #pull
+
 ## 2026-07-04 - [S1/high][investigating] YOLO 与 IMU 并行压测后板端网络失联
 
 - 模块：板端运行验证 / Wi-Fi 自连 / `imu_pose` / `yolo_fb_detect`
