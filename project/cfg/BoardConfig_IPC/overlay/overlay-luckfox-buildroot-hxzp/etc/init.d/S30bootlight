@@ -1,0 +1,33 @@
+#!/bin/sh
+
+BOOT_LIGHT_BIN="/userdata/protocol_tool"
+BOOT_LIGHT_LOG="/tmp/bootlight.log"
+
+start_bootlight()
+{
+    (
+        wait_count=0
+        while [ "${wait_count}" -lt 5 ]; do
+            [ -x "${BOOT_LIGHT_BIN}" ] && break
+            sleep 1
+            wait_count=$((wait_count + 1))
+        done
+
+        if [ -x "${BOOT_LIGHT_BIN}" ]; then
+            "${BOOT_LIGHT_BIN}" led boot --port /dev/ttyS0 --baud 1000000 >"${BOOT_LIGHT_LOG}" 2>&1
+        else
+            echo "bootlight: ${BOOT_LIGHT_BIN} is not executable" >"${BOOT_LIGHT_LOG}"
+        fi
+    ) &
+}
+
+case "$1" in
+        start)
+                start_bootlight
+                ;;
+        stop)
+                ;;
+        *)
+                exit 1
+                ;;
+esac

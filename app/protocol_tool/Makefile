@@ -1,6 +1,6 @@
 TARGET ?= protocol_tool
 BUILD_DIR ?= build
-SRC := protocol_tool.c
+SRC := protocol_tool.c tool_common.c uart_tool.c can_tool.c led_tool.c
 
 TOOLCHAIN ?= /home/luckfox-pico-zero/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin
 CROSS_COMPILE ?= $(TOOLCHAIN)/arm-rockchip830-linux-uclibcgnueabihf-
@@ -15,9 +15,9 @@ LDFLAGS ?=
 
 all: $(BUILD_DIR)/$(TARGET)
 
-$(BUILD_DIR)/$(TARGET): $(SRC)
+$(BUILD_DIR)/$(TARGET): $(SRC) *.h
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS)
 
 host:
 	@mkdir -p $(BUILD_DIR)
