@@ -214,8 +214,8 @@ static int parse_led_boot_options(int argc, char **argv, led_boot_config_t *cfg)
             cfg->headlight.frequency_hz = value;
         } else if (strcmp(argv[arg_index], "--brightness") == 0) {
             if (++arg_index >= argc ||
-                tool_parse_u32_arg(argv[arg_index], 0U, 100U, &value) < 0) {
-                fprintf(stderr, "--brightness requires 0..100\n");
+                tool_parse_u32_arg(argv[arg_index], 0U, 5U, &value) < 0) {
+                fprintf(stderr, "--brightness requires 0..5\n");
                 return -1;
             }
             cfg->headlight.brightness = value;
@@ -682,7 +682,7 @@ static void print_usage(const char *argv0)
         "  %s uart request <cmd> [--port /dev/ttyS0] [--baud 1000000] [--seq n] [--timeout-ms n] [--verbose] [--payload hex...]\n"
         "  %s uart ping [--port /dev/ttyS0] [--baud 1000000] [--seq n] [--timeout-ms n] [--verbose] [--payload hex...]\n"
         "  %s uart version [--port /dev/ttyS0] [--baud 1000000] [--seq n] [--timeout-ms n] [--verbose]\n"
-        "  %s led boot [--port /dev/ttyS0] [--baud 1000000] [--chip ff490020] [--brightness 100] [--tail-rgb 255 220 140]\n"
+        "  %s led boot [--port /dev/ttyS0] [--baud 1000000] [--chip ff490020] [--brightness 5] [--tail-rgb 255 220 140]\n"
         "  %s can build <std-id> <cmd> [args...]\n"
         "  %s can decode <std-id> <8-byte-data-hex...>\n",
         argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0);

@@ -53,7 +53,7 @@ ssh root@192.168.2.16 'chmod +x /userdata/protocol_tool'
 
 默认灯效：
 
-1. 大灯 `1000 ms` 渐变到最亮。
+1. 大灯 `1000 ms` 渐变到 `5%` 亮度。
 2. 大灯熄灭 `300 ms`。
 3. 大灯和尾部两个 RGB 灯一起快速闪烁 `5` 次，每次亮 `50 ms`、灭 `50 ms`。
 4. 全部熄灭。
@@ -68,7 +68,7 @@ ssh root@192.168.2.16 'chmod +x /userdata/protocol_tool'
 调试参数：
 
 ```sh
-/userdata/protocol_tool led boot --tail-rgb 255 240 180 --brightness 80
+/userdata/protocol_tool led boot --tail-rgb 255 240 180 --brightness 4
 /userdata/protocol_tool led boot --no-headlight
 /userdata/protocol_tool led boot --no-tail
 ```
